@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  # -----------------------------------------------------
+  # 1. PostgreSQL (with PostGIS) Service
+  # -----------------------------------------------------
+  db:
+    image: postgis/postgis:16-3.4   # PostGIS 확장이 포함된 PostgreSQL 이미지
+    platform: linux/amd64           # 🚨 M1/M2/M3 Mac 사용자를 위한 플랫폼 강제 지정 🚨
+    container_name: ev_charger_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ev_charger_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"   # 로컬에서 접근 가능하도록 포트 포워딩
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # -----------------------------------------------------
+  # 2. Redis Cache Service
+  # -----------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: ev_charger_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 5
+      start_period: 2s
+
+  # -----------------------------------------------------
+  # 3. FastAPI Application Service
+  # -----------------------------------------------------
+  api:
+    build: .   # 현재 디렉토리의 Dockerfile 사용
+    container_name: ev_charger_api
+    restart: always
+    # 👇 Uvicorn 실행 시 'app' 디렉토리가 아닌 '최상위' 디렉토리에서 모듈을 지정하여
+    #    상대 경로 임포트 오류를 우회하고, 모든 작업이 완료될 때까지 대기하도록 변경합니다.
+    command: >
+      sh -c "sleep 5 &&
+             alembic upgrade head &&
+             python init_db.py &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload" # <-- --reload 옵션 추가 (개발 편의성)
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/ev_charger_db
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - .:/app   # 코드 변경 시 반영 (개발용 마운트)
+
+# -----------------------------------------------------
+# Volumes (데이터 영속화)
+# -----------------------------------------------------
+volumes:
+  postgres_data:
+  redis_data:
