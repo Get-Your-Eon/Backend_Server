@@ -50,23 +50,37 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 # ----------------------------------------------------
-# 4. 마이그레이션 실행 (동기)
+# 4. PostGIS 안전 옵션 (autogenerate에서 무시할 객체)
+# ----------------------------------------------------
+def include_object(object, name, type_, reflected, compare_to):
+    """
+    Alembic autogenerate 시 PostGIS 시스템 테이블 무시
+    """
+    if type_ == "table" and name in ("spatial_ref_sys", "geometry_columns", "geography_columns"):
+        print(f"[INFO] Alembic autogenerate 무시: {name}")
+        return False
+    return True
+
+# ----------------------------------------------------
+# 5. 마이그레이션 실행 (동기)
 # ----------------------------------------------------
 def do_run_migrations(connection):
     """동기식으로 Alembic 마이그레이션 실행"""
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
+        include_object=include_object,  # ← PostGIS 안전 옵션 적용
     )
     with context.begin_transaction():
         context.run_migrations()
 
 # ----------------------------------------------------
-# 5. 비동기 마이그레이션
+# 6. 비동기 마이그레이션
 # ----------------------------------------------------
 async def run_async_migrations(connectable):
     """비동기 마이그레이션 실행 헬퍼"""
     async with connectable.connect() as connection:
+        print("[DEBUG] 비동기 연결 생성 완료, 마이그레이션 실행 중...")
         await connection.run_sync(do_run_migrations)
 
 async def run_migrations_online_async():
@@ -90,16 +104,17 @@ async def run_migrations_online_async():
         await conn.run_sync(do_run_migrations)
 
     await connectable.dispose()
+    print("[DEBUG] 비동기 마이그레이션 완료, 엔진 종료")
 
 # ----------------------------------------------------
-# 6. 온라인(비동기) 실행 래퍼
+# 7. 온라인(비동기) 실행 래퍼
 # ----------------------------------------------------
 def run_migrations_online() -> None:
     """Run migrations in 'online' (async) mode."""
     asyncio.run(run_migrations_online_async())
 
 # ----------------------------------------------------
-# 7. 실행 진입점
+# 8. 실행 진입점
 # ----------------------------------------------------
 if context.is_offline_mode():
     run_migrations_offline()
