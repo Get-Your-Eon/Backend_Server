@@ -8,7 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func
 import redis.asyncio as redis
-from geoalchemy2.functions import ST_DWithin, ST_Point
+from geoalchemy2.functions import ST_DWithin, ST_SetSRID, ST_Point
+from geoalchemy2.shape import to_shape
 
 # 프로젝트 내부 모듈 임포트
 from ...models import Station, Charger, get_async_session
@@ -20,17 +21,11 @@ from ...config import settings
 router = APIRouter()
 
 # ----------------------------------------------------
-# [추가] V1 API 루트 헬스체크 엔드포인트
+# V1 API 기본 헬스 체크
 # ----------------------------------------------------
-@router.get(
-    "/",
-    summary="V1 API 기본 테스트",
-    tags=["Test"]
-)
+@router.get("/", summary="V1 API 기본 테스트", tags=["Test"])
 async def v1_root():
-    """V1 API 라우터가 정상적으로 로드되었는지 확인합니다."""
     return {"message": "V1 API is running successfully!"}
-
 
 # ----------------------------------------------------
 # A. 충전소 (Stations) 엔드포인트
@@ -48,7 +43,8 @@ async def get_stations(
         db: AsyncSession = Depends(get_async_session)
 ):
     try:
-        search_point = ST_Point(longitude, latitude, srid=4326)
+        # 좌표 SRID 맞춤
+        search_point = ST_SetSRID(ST_Point(longitude, latitude), 4326)
         distance_meters = radius_km * 1000
 
         query = (
@@ -56,11 +52,20 @@ async def get_stations(
             .where(ST_DWithin(Station.location, search_point, distance_meters))
             .order_by(func.ST_Distance(Station.location, search_point))
         )
-
         result = await db.execute(query)
         stations_db = result.scalars().all()
 
-        stations_read = [StationPublic.model_validate(s, from_attributes=True) for s in stations_db]
+        # DB 좌표 → lon/lat로 변환
+        stations_read = []
+        for s in stations_db:
+            geom = to_shape(s.location)  # Shapely Point
+            station_dict = StationPublic.model_validate(s, from_attributes=True).model_dump()
+            station_dict.update({
+                "longitude": geom.x,
+                "latitude": geom.y
+            })
+            stations_read.append(station_dict)
+
         return stations_read
 
     except Exception as e:
@@ -68,7 +73,6 @@ async def get_stations(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve stations: {e}"
         )
-
 
 @router.get(
     "/stations/{station_code}",
@@ -90,15 +94,19 @@ async def get_station_detail(
             detail=f"Station with code {station_code} not found"
         )
 
-    return StationPublic.model_validate(station_db, from_attributes=True)
-
+    geom = to_shape(station_db.location)
+    station_dict = StationPublic.model_validate(station_db, from_attributes=True).model_dump()
+    station_dict.update({
+        "longitude": geom.x,
+        "latitude": geom.y
+    })
+    return station_dict
 
 # ----------------------------------------------------
 # B. 충전기 (Chargers) 엔드포인트
 # ----------------------------------------------------
 def get_charger_cache_key(station_code: str, charger_code: str) -> str:
     return f"charger_status:{station_code}:{charger_code}"
-
 
 @router.patch(
     "/chargers/{station_code}/{charger_code}/status",
@@ -129,7 +137,6 @@ async def update_charger_status(
 
     charger_db.status_code = update_data.new_status_code
     charger_db.updated_at = datetime.utcnow()
-
     await db.commit()
     await db.refresh(charger_db)
 
@@ -145,7 +152,6 @@ async def update_charger_status(
 
     return ChargerBase.model_validate(charger_db, from_attributes=True)
 
-
 @router.get(
     "/chargers/status/{station_code}/{charger_code}",
     response_model=dict,
@@ -159,7 +165,6 @@ async def get_charger_status(
         redis_client: Optional[redis.Redis] = Depends(get_redis_client)
 ):
     cache_key = get_charger_cache_key(station_code, charger_code)
-
     cached_data = await get_cache(cache_key)
     if cached_data:
         return {"source": "cache", "status_data": cached_data}
