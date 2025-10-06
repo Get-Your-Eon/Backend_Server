@@ -1,17 +1,21 @@
 # app/schemas/station.py
 from pydantic import BaseModel
 from typing import Optional
+from datetime import datetime
 
 # -----------------------------------
 # 충전소 응답용 모델
 # -----------------------------------
 class StationPublic(BaseModel):
+    id: int  # DB PK
     station_code: str
     name: str
     address: Optional[str]
     provider: Optional[str]
     latitude: Optional[float]
     longitude: Optional[float]
+    created_at: Optional[datetime]
+    updated_at: Optional[datetime]
 
 # -----------------------------------
 # 충전기 상태 모델

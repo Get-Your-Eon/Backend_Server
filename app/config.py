@@ -10,7 +10,7 @@ class Settings(BaseSettings):
 
     # --- 데이터베이스 설정 (PostgreSQL + PostGIS) ---
     # 예시: postgresql+asyncpg://user:password@db_host:5432/db_name
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@db:5432/ev_charger_db"
+    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@ev_charger_postgres:5432/Codyssey_Team_A"
     API_VERSION: str = "1.0.0"
     # --- Redis 캐시 설정 ---
     # [수정]: Docker 컨테이너 환경에서 Redis 서비스 이름('redis' 또는 'my-redis')을 호스트로 사용하도록 변경
