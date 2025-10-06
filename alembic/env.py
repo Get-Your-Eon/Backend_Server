@@ -1,28 +1,25 @@
 import os
 import sys
+import asyncio
 from dotenv import load_dotenv
 from logging.config import fileConfig
 
-from sqlalchemy import engine_from_config
+from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy import pool
-
 from alembic import context
 
 # ----------------------------------------------------
 # 1. 환경 설정 및 모델 임포트
 # ----------------------------------------------------
 
-# .env 파일 로드 (DB URL 환경 변수를 사용하기 위해 필수)
+# .env 파일 로드
 load_dotenv()
 
-# 프로젝트 루트 경로를 시스템 경로에 추가합니다.
-# 이를 통해 app/models.py를 임포트할 수 있습니다.
+# 프로젝트 루트 경로를 시스템 경로에 추가
 sys.path.append(os.getcwd())
 
-# 사용자님이 정의한 Base 모델을 임포트합니다.
-from app.models import Base
-# ----------------------------------------------------
-
+# Base 모델 임포트
+from app.models import Base  # app.models 임포트는 유지
 
 # Alembic Config 객체
 config = context.config
@@ -32,18 +29,15 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # ----------------------------------------------------
-# 2. 마이그레이션 대상 메타데이터 설정
+# 2. 메타데이터 설정
 # ----------------------------------------------------
-# Alembic이 변경 사항을 감지할 SQLAlchemy 모델의 MetaData를 지정합니다.
-# **중복 제거 및 Base.metadata로 설정 완료**
 target_metadata = Base.metadata
+
 # ----------------------------------------------------
-
-
-# 오프라인 마이그레이션 모드 함수
+# 3. 오프라인 마이그레이션
+# ----------------------------------------------------
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
-    # alembic.ini의 sqlalchemy.url에 설정된 환경 변수 (DATABASE_URL)를 가져옵니다.
     url = config.get_main_option("sqlalchemy.url")
     context.configure(
         url=url,
@@ -55,28 +49,58 @@ def run_migrations_offline() -> None:
     with context.begin_transaction():
         context.run_migrations()
 
+# ----------------------------------------------------
+# 4. 마이그레이션 실행 (동기)
+# ----------------------------------------------------
+def do_run_migrations(connection):
+    """동기식으로 Alembic 마이그레이션 실행"""
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+    )
+    with context.begin_transaction():
+        context.run_migrations()
 
-# 온라인 마이그레이션 모드 함수
-def run_migrations_online() -> None:
-    """Run migrations in 'online' mode."""
-    url = config.get_main_option("sqlalchemy.url")
-    print(f"DEBUG: Alembic이 읽은 URL: {url}")
+# ----------------------------------------------------
+# 5. 비동기 마이그레이션
+# ----------------------------------------------------
+async def run_async_migrations(connectable):
+    """비동기 마이그레이션 실행 헬퍼"""
+    async with connectable.connect() as connection:
+        await connection.run_sync(do_run_migrations)
 
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
+async def run_migrations_online_async():
+    """비동기 DB 엔진을 생성하고 마이그레이션 실행"""
+    from app.config import settings
+
+    database_url = settings.DATABASE_URL
+    if database_url.startswith("postgresql://"):
+        async_db_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    else:
+        async_db_url = database_url
+
+    print(f"[DEBUG] ASYNC_DATABASE_URL being used: {async_db_url}")
+
+    connectable = create_async_engine(
+        async_db_url,
         poolclass=pool.NullPool,
     )
 
-    with connectable.connect() as connection:
-        context.configure(
-            connection=connection, target_metadata=target_metadata
-        )
+    async with connectable.begin() as conn:
+        await conn.run_sync(do_run_migrations)
 
-        with context.begin_transaction():
-            context.run_migrations()
+    await connectable.dispose()
 
+# ----------------------------------------------------
+# 6. 온라인(비동기) 실행 래퍼
+# ----------------------------------------------------
+def run_migrations_online() -> None:
+    """Run migrations in 'online' (async) mode."""
+    asyncio.run(run_migrations_online_async())
 
+# ----------------------------------------------------
+# 7. 실행 진입점
+# ----------------------------------------------------
 if context.is_offline_mode():
     run_migrations_offline()
 else:
