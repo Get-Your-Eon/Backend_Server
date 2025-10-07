@@ -1,77 +1,66 @@
-import redis.asyncio as redis
 import json
-import contextlib
-from typing import Any, Optional, AsyncGenerator
+from typing import Any, Optional
+# redis.asyncio as redis 대신, Redis 클래스를 명시적으로 임포트하여 사용합니다.
+from redis.asyncio import Redis
 from .config import settings
 
-# Redis 클라이언트 인스턴스 (연결 풀 역할)
-# NOTE: redis.asyncio.Redis 인스턴스가 연결 풀 역할을 수행합니다.
-redis_pool: Optional[redis.Redis] = None
+# redis_pool 변수의 타입을 명시적으로 Redis 인스턴스 또는 None으로 지정
+redis_pool: Optional[Redis] = None
 
 async def init_redis_pool():
-    """Redis 연결 풀을 초기화하고 전역 redis_pool 변수에 할당합니다."""
     global redis_pool
     try:
-        # decode_responses=True는 Redis에서 읽은 값을 문자열로 자동 변환합니다.
-        # connection_pool은 내부적으로 관리됩니다.
-        redis_pool = redis.Redis(
+        # Redis 클래스를 사용하여 클라이언트 인스턴스 생성
+        # config.py에 정의된 REDIS_PASSWORD를 사용하여 연결합니다. (비밀번호가 비어있지 않은 경우)
+        redis_pool = Redis(
             host=settings.REDIS_HOST,
             port=settings.REDIS_PORT,
             db=0,
+            # REDIS_PASSWORD가 설정되어 있으면 사용하고, 없으면 None을 전달합니다.
+            password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None,
             decode_responses=True,
-            # max_connections 등을 설정하여 풀 크기를 제어할 수 있습니다.
         )
-        # 풀이 제대로 초기화되었는지 확인하기 위해 ping을 실행합니다.
         await redis_pool.ping()
-        print("Redis connection successful.")
+        print(f"✅ Redis connection successful ({settings.REDIS_HOST}:{settings.REDIS_PORT})")
     except Exception as e:
-        print(f"Redis connection failed: {e}")
-        # 연결 실패 시에도 애플리케이션 실행을 위해 None으로 유지
+        print(f"❌ Redis connection failed ({settings.REDIS_HOST}:{settings.REDIS_PORT}): {e}")
         redis_pool = None
 
 async def close_redis_pool():
-    """Redis 연결 풀을 종료합니다. (app.main의 lifespan 종료 로직에서 호출됨)"""
     global redis_pool
     if redis_pool:
-        # redis.asyncio의 close()는 내부적으로 모든 연결을 닫고 풀을 정리합니다.
         await redis_pool.close()
         redis_pool = None
 
-# [핵심 수정 완료]: @asynccontextmanager를 제거하고 클라이언트 인스턴스 자체를 반환하도록 수정
-async def get_redis_client() -> Optional[redis.Redis]:
-    """
-    FastAPI의 Depends에서 사용하기 위한 의존성 주입 함수입니다.
-    Redis 풀(redis_pool) 인스턴스를 직접 반환합니다.
-    """
+async def get_redis_client() -> Optional[Redis]:
     return redis_pool
 
-# --- 기존 캐시 유틸리티 함수들도 redis_pool을 사용하도록 수정 ---
+# get_cache 함수에 옵션 인수인 client를 추가하여 2개 인수로 호출되어도 오류가 나지 않도록 수정
+async def get_cache(key: str, client: Optional[Redis] = None) -> Any:
+    # client가 제공되지 않으면 전역 redis_pool을 사용
+    current_client: Optional[Redis] = client if client is not None else redis_pool
 
-async def get_cache(key: str) -> Optional[Any]:
-    """
-    Redis에서 캐시를 조회하고, JSON 문자열을 파이썬 객체로 변환합니다.
-    """
-    if not redis_pool:
+    # 클라이언트 인스턴스가 None인 경우 즉시 None 반환 (None.get() 오류 방지)
+    if current_client is None:
         return None
 
-    cached_data = await redis_pool.get(key)
-    if cached_data:
-        # JSON 문자열을 다시 파이썬 객체로 역직렬화
-        return json.loads(cached_data)
-    return None
+    # 클라이언트 인스턴스에서 get 메서드를 명시적으로 호출
+    data = await current_client.get(key)
+    return json.loads(data) if data else None
 
-async def set_cache(key: str, value: Any, expire: int = settings.CACHE_EXPIRE_SECONDS):
-    """
-    Redis에 값을 저장하고, 파이썬 객체를 JSON 문자열로 변환하여 저장합니다.
-    """
-    if not redis_pool:
+# set_cache 함수에도 옵션 인수인 client를 추가하여 유연성을 확보
+async def set_cache(key: str, value: Any, expire: int = settings.CACHE_EXPIRE_SECONDS, client: Optional[Redis] = None):
+    # client가 제공되지 않으면 전역 redis_pool을 사용
+    current_client: Optional[Redis] = client if client is not None else redis_pool
+
+    # 클라이언트 인스턴스가 None인 경우 즉시 종료 (None.set() 오류 방지)
+    if current_client is None:
         return
 
-    # 파이썬 객체를 JSON 문자열로 직렬화
-    serialized_value = json.dumps(value, default=str)
-    await redis_pool.set(key, serialized_value, ex=expire)
+    # default=str을 사용하여 datetime 객체 등을 직렬화할 때 발생하는 오류 방지
+    # 클라이언트 인스턴스에서 set 메서드를 명시적으로 호출
+    await current_client.set(key, json.dumps(value, default=str), ex=expire)
 
 async def delete_cache(key: str):
-    """Redis에서 특정 키의 캐시를 삭제합니다."""
     if redis_pool:
         await redis_pool.delete(key)
