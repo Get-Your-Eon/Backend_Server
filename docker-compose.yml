@@ -33,9 +33,12 @@ services:
              python init_db.py &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 
-    # ✅ .env 파일을 자동으로 로드 (DATABASE_URL, REDIS_HOST 등)
+    # ✅ .env 파일 로드 + Docker 환경 표시
     env_file:
       - .env
+    environment:
+      - DOCKER_ENV=true         # Docker 내부에서 Redis와 DB 호스트 자동 조정
+      - DATABASE_HOST=host.docker.internal  # 로컬 PostgreSQL 접근
 
     ports:
       - "8000:8000"

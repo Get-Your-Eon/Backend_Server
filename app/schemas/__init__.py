@@ -1,3 +1,13 @@
 # app/schemas/__init__.py
-from .station import StationPublic, ChargerBase, ChargerStatusUpdate
-from .subsidy import SubsidyPublic, SubsidyRequest, SubsidyListResponse
+from .station import (
+    StationPublic,
+    StationListResponse,       # ✅ 추가
+    ChargerBase,
+    ChargerStatusUpdate,
+    ChargerListResponse        # ✅ 추가
+)
+from .subsidy import (
+    SubsidyRequest,
+    SubsidyPublic,
+    SubsidyListResponse
+)

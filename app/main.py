@@ -18,7 +18,7 @@ from app.redis_client import (
     get_cache
 )
 from app.api.v1.router import router as api_v1_router
-
+from app.api.v1 import station_router
 
 # --- Lifespan Context Manager 정의 ---
 @contextlib.asynccontextmanager

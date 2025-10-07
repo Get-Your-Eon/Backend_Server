@@ -1,23 +1,53 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+import os
 
 class Settings(BaseSettings):
-    # 환경 변수를 .env 파일에서 로드합니다. (Docker 환경에서는 직접 주입됩니다.)
+    # .env 파일 로드, Docker에서는 환경 변수 직접 주입 가능
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # --- 기본 프로젝트 설정 ---
-    # 서버 충돌을 일으킨 PROJECT_NAME 속성을 추가합니다.
+    # --------------------------
+    # 기본 프로젝트 설정
+    # --------------------------
     PROJECT_NAME: str = "EV Charger Management API"
-
-    # --- 데이터베이스 설정 (PostgreSQL + PostGIS) ---
-    # 예시: postgresql+asyncpg://user:password@db_host:5432/db_name
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@host.docker.internal:5432/Codyssey_Team_A"
     API_VERSION: str = "1.0.0"
-    # --- Redis 캐시 설정 ---
-    # [수정]: Docker 컨테이너 환경에서 Redis 서비스 이름('redis' 또는 'my-redis')을 호스트로 사용하도록 변경
-    REDIS_HOST: str = "redis"
-    REDIS_PORT: int = 6379
 
-    # 캐시 만료 시간 (초 단위). 예시로 300초(5분) 설정
+    # --------------------------
+    # 데이터베이스 설정
+    # --------------------------
+    DATABASE_USER: str = "postgres"
+    DATABASE_PASSWORD: str = "postgres"
+    DATABASE_HOST: str = "localhost"  # 로컬 기본값
+    DATABASE_PORT: int = 5432
+    DATABASE_NAME: str = "Codyssey_Team_A"
+
+    # 최종 DB URL (자동 구성)
+    @property
+    def DATABASE_URL(self) -> str:
+        user = self.DATABASE_USER
+        password = self.DATABASE_PASSWORD
+        host = self.DATABASE_HOST
+        port = self.DATABASE_PORT
+        dbname = self.DATABASE_NAME
+        return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{dbname}"
+
+    # --------------------------
+    # Redis 설정
+    # --------------------------
+    REDIS_HOST: str = "localhost"  # 로컬 기본값
+    REDIS_PORT: int = 6379
+    REDIS_PASSWORD: str = ""
     CACHE_EXPIRE_SECONDS: int = 300
 
+    # --------------------------
+    # Docker 환경이면 호스트 이름 변경
+    # --------------------------
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if os.getenv("DOCKER_ENV", "false").lower() == "true":
+            # Docker 컨테이너 내부 Redis 연결
+            self.REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+            # Docker 컨테이너에서도 로컬 PostgreSQL 바라보기
+            self.DATABASE_HOST = os.getenv("DATABASE_HOST", "host.docker.internal")
+
+# Settings 인스턴스 생성
 settings = Settings()
