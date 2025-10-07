@@ -15,10 +15,10 @@ services:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 1s
-      timeout: 3s
+      interval: 2s
+      timeout: 5s
       retries: 5
-      start_period: 2s
+      start_period: 5s
 
   # -----------------------------------------------------
   # 2. FastAPI Application Service
@@ -32,21 +32,24 @@ services:
              alembic upgrade head &&
              python init_db.py &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
-    environment:
-      # 👇 로컬 PostgreSQL DB 사용
-      DATABASE_URL: postgresql+asyncpg://postgres:gkfka9116%21@host.docker.internal:5432/Codyssey_Team_A
-      REDIS_HOST: redis
-      REDIS_PORT: 6379
+
+    # ✅ .env 파일을 자동으로 로드 (DATABASE_URL, REDIS_HOST 등)
+    env_file:
+      - .env
+
     ports:
       - "8000:8000"
+
     depends_on:
       redis:
         condition: service_healthy
+
     volumes:
-      - .:/app   # 코드 변경 시 반영 (개발용 마운트)
+      - .:/app   # 코드 변경 시 자동 반영 (개발용 마운트)
 
 # -----------------------------------------------------
 # Volumes (데이터 영속화)
 # -----------------------------------------------------
 volumes:
   redis_data:
+    driver: local
