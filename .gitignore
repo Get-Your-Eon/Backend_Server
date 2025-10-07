@@ -10,3 +10,5 @@ venv/
 .vscode/
 *.iml
 
+__pycache__/
+*.pyc
