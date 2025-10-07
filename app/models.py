@@ -1,19 +1,20 @@
 from __future__ import annotations
+
 import datetime
 from typing import List, Optional
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Mapped, mapped_column, relationship, sessionmaker
-from sqlalchemy import Integer, String, Text, Float, DateTime, ForeignKey, UniqueConstraint, Column
-from sqlalchemy.sql import func
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+
 from geoalchemy2 import Geometry
 from geoalchemy2.shape import to_shape
-from .config import settings
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.sql import func
 
+# Base 클래스는 이 파일에서 모든 모델을 위해 정의됩니다.
 Base = declarative_base()
 
 # -----------------------------------------------------
-# 모델 정의
+# A. 충전소 (Stations) 모델
 # -----------------------------------------------------
 class Station(Base):
     __tablename__ = "stations"
@@ -33,6 +34,7 @@ class Station(Base):
     @property
     def latitude(self) -> Optional[float]:
         if self.location:
+            # geoalchemy2.shape.to_shape는 이미 임포트되어 있음
             return to_shape(self.location).y
         return None
 
@@ -43,6 +45,9 @@ class Station(Base):
         return None
 
 
+# -----------------------------------------------------
+# B. 충전기 (Chargers) 모델
+# -----------------------------------------------------
 class Charger(Base):
     __tablename__ = "chargers"
 
@@ -62,6 +67,9 @@ class Charger(Base):
     station: Mapped['Station'] = relationship(back_populates="chargers")
 
 
+# -----------------------------------------------------
+# C. API 로그 (ApiLog) 모델
+# -----------------------------------------------------
 class ApiLog(Base):
     __tablename__ = "api_logs"
 
@@ -75,12 +83,15 @@ class ApiLog(Base):
 
 
 # -----------------------------------------------------
-# AsyncSession 정의 (get_async_session)
+# D. 보조금 (Subsidy) 모델
 # -----------------------------------------------------
-DATABASE_URL = settings.DATABASE_URL
-engine = create_async_engine(DATABASE_URL, echo=True)
-async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+class Subsidy(Base):
+    __tablename__ = "subsidies"
 
-async def get_async_session() -> AsyncSession:
-    async with async_session() as session:
-        yield session
+    id = Column(Integer, primary_key=True, index=True)
+    manufacturer = Column(String, index=True, nullable=False) # 제조사 (예: 현대자동차)
+    model_group = Column(String, index=True, nullable=False)    # 모델 그룹 (예: GV60)
+    model_name = Column(String, unique=True, nullable=False)    # 세부 모델명 (풀 스펙)
+    subsidy_national_10k_won = Column(Integer, nullable=False)   # 국고 보조금 (만원 단위)
+    subsidy_local_10k_won = Column(Integer, nullable=False)      # 지자체 보조금 (만원 단위)
+    subsidy_total_10k_won = Column(Integer, nullable=False)      # 총 보조금 (만원 단위)

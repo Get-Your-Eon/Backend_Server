@@ -33,6 +33,23 @@ class StationPublic(BaseModel):
         # SQLAlchemy ORM 모델의 필드 이름을 Pydantic 모델의 필드 이름으로 자동 매핑합니다.
         from_attributes = True
 
+# 보조금 상세 정보 스키마 추가
+class SubsidyPublic(BaseModel):
+    """보조금 상세 정보 스키마."""
+    id: int
+    manufacturer: str = Field(..., description="제조사")
+    model_group: str = Field(..., description="모델 그룹명 (예: IONIQ5)")
+    model_name: str = Field(..., description="모델 상세 이름 (예: IONIQ 5 롱 레인지 2WD)")
+    max_subsidy_amount: int = Field(..., description="최대 보조금액 (국비 + 지방비)")
+    national_subsidy: int = Field(..., description="국비 보조금액")
+    local_subsidy: int = Field(..., description="지자체(local) 보조금액")
+    is_performance_verified: bool = Field(..., description="성능평가 통과 여부")
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
 # ----------------------------------------------------------------------
 # 2. API Log Schemas (API 로그 기록용)
 # ----------------------------------------------------------------------
