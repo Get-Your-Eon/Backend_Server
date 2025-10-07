@@ -1,6 +1,6 @@
 import json
 from datetime import datetime
-from typing import Optional, Any, List
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException
 from starlette import status
@@ -10,25 +10,19 @@ from sqlalchemy import func
 import redis.asyncio as redis
 from geoalchemy2.functions import ST_DWithin, ST_SetSRID, ST_Point
 from geoalchemy2.shape import to_shape
-import geoalchemy2.types # PostGIS 타입 임포트 추가 (마이그레이션 오류 방지용)
+import geoalchemy2.types  # PostGIS 타입 임포트 (마이그레이션 오류 방지용)
 
 # 프로젝트 내부 모듈 임포트
-# get_async_session은 app.database에서 임포트합니다. (이전 오류 해결)
 from ...models import Station, Charger
 from ...database import get_async_session
-from ...schemas import StationPublic, ChargerStatusUpdate, ChargerBase
+from ...schemas import StationPublic, ChargerBase, ChargerStatusUpdate
 from ...redis_client import get_redis_client, set_cache, get_cache
 from ...mock_api import get_mock_charger_status
 from ...config import settings
+from app.services.station_service import get_stations as service_get_stations
 
-# 새롭게 생성된 라우터를 임포트합니다.
-# ⚠️ [수정]: subsidy_router 모듈 자체를 임포트하는 대신,
-#           해당 모듈 내부에 정의된 'router' 객체를 직접 임포트하고 별칭을 부여합니다.
+# Subsidy router
 from app.api.v1.subsidy_router import router as subsidy_v1_router
-
-# 기존의 station_router가 현재 파일(router.py)에 직접 정의되어 있지 않고,
-# 별도의 파일(station_router.py)에 있었다면 station_router 임포트가 필요합니다.
-# 현재 코드는 모든 엔드포인트가 router.py에 있으므로, 이 파일의 APIRouter 인스턴스를 사용합니다.
 
 router = APIRouter()
 
@@ -39,9 +33,9 @@ router = APIRouter()
 async def v1_root():
     return {"message": "V1 API is running successfully!"}
 
+
 # ----------------------------------------------------
 # A. 충전소 (Stations) 엔드포인트
-# 기존 충전소 라우터 코드를 그대로 유지합니다.
 # ----------------------------------------------------
 @router.get(
     "/stations",
@@ -50,42 +44,30 @@ async def v1_root():
     tags=["Stations"]
 )
 async def get_stations(
+        # 1. DB 세션 종속성을 라우터 함수 매개변수에 추가합니다. (이 부분이 누락되어 있었습니다.)
+        db: AsyncSession = Depends(get_async_session),
         latitude: float = 37.5665,
         longitude: float = 126.9780,
         radius_km: float = 1.0,
-        db: AsyncSession = Depends(get_async_session)
+        redis_client: Optional[redis.Redis] = Depends(get_redis_client)
 ):
     try:
-        # 좌표 SRID 맞춤
-        search_point = ST_SetSRID(ST_Point(longitude, latitude), 4326)
-        distance_meters = radius_km * 1000
-
-        query = (
-            select(Station)
-            .where(ST_DWithin(Station.location, search_point, distance_meters))
-            .order_by(func.ST_Distance(Station.location, search_point))
+        # 2. service_get_stations 호출 시, db를 첫 번째 인수로 정확히 전달합니다.
+        # 명확성을 위해 키워드 인자를 사용하여 순서 오류를 방지합니다.
+        stations = await service_get_stations(
+            db=db,
+            lat=latitude,
+            lng=longitude,
+            radius_m=radius_km*1000,
+            redis_client=redis_client
         )
-        result = await db.execute(query)
-        stations_db = result.scalars().all()
-
-        # DB 좌표 → lon/lat로 변환
-        stations_read = []
-        for s in stations_db:
-            geom = to_shape(s.location)  # Shapely Point
-            station_dict = StationPublic.model_validate(s, from_attributes=True).model_dump()
-            station_dict.update({
-                "longitude": geom.x,
-                "latitude": geom.y
-            })
-            stations_read.append(station_dict)
-
-        return stations_read
-
+        return stations
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve stations: {e}"
         )
+
 
 @router.get(
     "/stations/{station_code}",
@@ -115,12 +97,13 @@ async def get_station_detail(
     })
     return station_dict
 
+
 # ----------------------------------------------------
 # B. 충전기 (Chargers) 엔드포인트
-# 기존 충전기 라우터 코드를 그대로 유지합니다.
 # ----------------------------------------------------
 def get_charger_cache_key(station_code: str, charger_code: str) -> str:
     return f"charger_status:{station_code}:{charger_code}"
+
 
 @router.patch(
     "/chargers/{station_code}/{charger_code}/status",
@@ -165,6 +148,7 @@ async def update_charger_status(
         await set_cache(cache_key, cache_value, expire=settings.CACHE_EXPIRE_SECONDS)
 
     return ChargerBase.model_validate(charger_db, from_attributes=True)
+
 
 @router.get(
     "/chargers/status/{station_code}/{charger_code}",
@@ -218,8 +202,8 @@ async def get_charger_status(
         detail=f"Status for Charger {charger_code} at station {station_code} not found."
     )
 
+
 # ----------------------------------------------------
 # C. 보조금 (Subsidies) 엔드포인트 통합
 # ----------------------------------------------------
-# subsidy_router의 모든 경로를 메인 라우터에 포함시킵니다.
-router.include_router(subsidy_v1_router) # 👈 subsidy_v1_router 별칭 사용
+router.include_router(subsidy_v1_router)

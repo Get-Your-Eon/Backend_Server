@@ -1,4 +1,4 @@
-# app/schemas/subsidy.py (만원 단위 반영)
+# app/schemas/subsidy.py (만원 단위 반영, 오류 수정 완료)
 
 from pydantic import BaseModel, Field, conint
 from typing import List
@@ -23,3 +23,6 @@ class SubsidyPublic(BaseModel):
 # --- 3. 리스트 응답 스키마 (Output Wrapper) ---
 class SubsidyListResponse(BaseModel):
     data: List[SubsidyPublic]
+
+# ⚠️ 기존에 서비스에서 사용하던 SubsidyResponse 대신
+# SubsidyPublic 또는 SubsidyListResponse를 사용하도록 통일

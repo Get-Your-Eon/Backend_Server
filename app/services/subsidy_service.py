@@ -1,8 +1,8 @@
 from typing import List
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import Subsidy # Subsidy 모델 임포트
+from app.models import Subsidy  # Subsidy 모델 임포트
+from app.schemas.subsidy import SubsidyPublic  # 수정: SubsidyResponse → SubsidyPublic
 
 class SubsidyService:
     """
@@ -15,30 +15,35 @@ class SubsidyService:
             db: AsyncSession,
             manufacturer: str,
             model_group: str
-    ) -> List[Subsidy]:
+    ) -> List[SubsidyPublic]:
         """
         제조사(manufacturer)와 모델 그룹명(model_group)을 기준으로
         해당 그룹에 속하는 모든 상세 보조금 정보를 조회합니다.
-
-        Router에서 호출될 때, model_group은 대문자로 정규화되어 사용됩니다.
         """
 
-        # 모델 그룹은 데이터 삽입 시 대문자로 저장되므로, 쿼리 시에도 대문자 변환을 적용합니다.
-        normalized_model_group = model_group.upper()
+        # 입력값 공백 제거 및 None 처리
+        manufacturer = (manufacturer or "").strip()
+        normalized_model_group = (model_group or "").strip()
 
-        # 쿼리 구성: 제조사와 모델 그룹명이 모두 일치하는 행을 선택합니다.
+        # 쿼리 구성: 제조사와 모델 그룹명이 일치하는 행 조회
         query = select(Subsidy).where(
             Subsidy.manufacturer == manufacturer,
-            # 모델 그룹명이 해당 문자열로 시작하는 모든 상세 모델을 조회합니다.
             Subsidy.model_group.ilike(f"{normalized_model_group}%")
         ).order_by(Subsidy.model_name)
 
         result = await db.execute(query)
+        subsidies = result.scalars().all()
 
-        # Subsidy 모델 인스턴스 리스트 반환
-        return result.scalars().all()
+        # DB 모델을 API 응답용 스키마로 변환
+        return [
+            SubsidyPublic(
+                model_name=s.model_name,
+                subsidy_national_10k_won=s.subsidy_national_10k_won,
+                subsidy_local_10k_won=s.subsidy_local_10k_won,
+                subsidy_total_10k_won=s.subsidy_total_10k_won
+            )
+            for s in subsidies
+        ]
 
-# SubsidyService 클래스의 단일 인스턴스를 생성합니다.
-# subsidy_router.py 파일에서 'from app.services.subsidy_service import subsidy_service'로
-# 이 인스턴스를 임포트하여 사용합니다.
+# SubsidyService 클래스의 단일 인스턴스 생성
 subsidy_service = SubsidyService()

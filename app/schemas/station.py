@@ -1,10 +1,10 @@
 # app/schemas/station.py
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 # -----------------------------------
-# 충전소 응답용 모델
+# 1. 충전소 단일 객체 응답용 모델
 # -----------------------------------
 class StationPublic(BaseModel):
     id: int  # DB PK
@@ -18,7 +18,13 @@ class StationPublic(BaseModel):
     updated_at: Optional[datetime]
 
 # -----------------------------------
-# 충전기 상태 모델
+# 2. 충전소 리스트 응답 Wrapper
+# -----------------------------------
+class StationListResponse(BaseModel):
+    stations: List[StationPublic]
+
+# -----------------------------------
+# 3. 충전기 상태 단일 객체 모델
 # -----------------------------------
 class ChargerBase(BaseModel):
     charger_id: int
@@ -28,7 +34,13 @@ class ChargerBase(BaseModel):
     status_code: Optional[int]
 
 # -----------------------------------
-# 충전기 상태 업데이트 요청 모델
+# 4. 충전기 상태 업데이트 요청 모델
 # -----------------------------------
 class ChargerStatusUpdate(BaseModel):
     new_status_code: int
+
+# -----------------------------------
+# 5. 충전기 리스트 응답 Wrapper
+# -----------------------------------
+class ChargerListResponse(BaseModel):
+    chargers: List[ChargerBase]
