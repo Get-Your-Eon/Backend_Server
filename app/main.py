@@ -4,12 +4,12 @@ from datetime import datetime
 
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text  # 문자열 SQL 실행용
+from sqlalchemy import text
 from redis.asyncio import Redis
 
 # 프로젝트 내부 모듈 임포트
-from app.config import settings
-from app.database import get_async_session
+from app.core.config import settings
+from app.db.database import get_async_session
 from app.redis_client import (
     init_redis_pool,
     close_redis_pool,
@@ -17,8 +17,8 @@ from app.redis_client import (
     set_cache,
     get_cache
 )
-from app.api.v1.router import router as api_v1_router
-from app.api.v1 import station_router
+
+from app.api.v1.api import api_router
 
 # --- Lifespan Context Manager 정의 ---
 @contextlib.asynccontextmanager
@@ -63,15 +63,12 @@ def read_root():
 
 
 # --- V1 API 라우터 포함 ---
-app.include_router(api_v1_router, prefix="/api/v1")
+app.include_router(api_router, prefix="/api/v1")
 
 
 # --- DB 연결 테스트 엔드포인트 ---
 @app.get("/db-test", tags=["Infrastructure"], summary="DB 연결 및 쿼리 테스트")
 async def db_test_endpoint(db: AsyncSession = Depends(get_async_session)):
-    """
-    DB 연결 상태 및 간단한 쿼리 테스트
-    """
     start_time = time.time()
     try:
         result = await db.execute(text("SELECT 1"))
@@ -84,7 +81,6 @@ async def db_test_endpoint(db: AsyncSession = Depends(get_async_session)):
             }
         else:
             raise Exception("Unexpected SQL result.")
-
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -95,9 +91,6 @@ async def db_test_endpoint(db: AsyncSession = Depends(get_async_session)):
 # --- Redis 연결 테스트 엔드포인트 ---
 @app.get("/redis-test", tags=["Infrastructure"], summary="Redis 캐시 연결 테스트")
 async def redis_test_endpoint(redis_client: Redis = Depends(get_redis_client)):
-    """
-    Redis 쓰기/읽기 테스트
-    """
     if not redis_client:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

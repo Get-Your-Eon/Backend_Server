@@ -14,11 +14,13 @@ import geoalchemy2.types  # PostGIS 타입 임포트 (마이그레이션 오류 
 
 # 프로젝트 내부 모듈 임포트
 from ...models import Station, Charger
-from ...database import get_async_session
+# 🌟 [수정 1] database.py가 db 디렉토리로 이동했으므로 경로 수정
+from ...db.database import get_async_session
 from ...schemas import StationPublic, ChargerBase, ChargerStatusUpdate
 from ...redis_client import get_redis_client, set_cache, get_cache
 from ...mock_api import get_mock_charger_status
-from ...config import settings
+# 🌟 [수정 2] config.py가 core 디렉토리로 이동했으므로 경로 수정
+from ...core.config import settings
 from app.services.station_service import get_stations as service_get_stations
 
 # Subsidy router

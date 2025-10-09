@@ -28,6 +28,9 @@ alembic = "^1.16.5"
 redis = "^6.4.0"
 shapely = "^2.0.4"
 requests = "^2.32.5"
+httpx = "^0.28.1"
+passlib = "^1.7.4"
+python-jose = {extras = ["cryptography"], version = "^3.5.0"}
 
 [tool.poetry.scripts]
 migrate = "scripts.migrate:main"

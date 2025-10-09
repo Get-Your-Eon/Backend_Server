@@ -1,9 +1,6 @@
 version: '3.8'
 
 services:
-  # -----------------------------------------------------
-  # 1. Redis Cache Service
-  # -----------------------------------------------------
   redis:
     image: redis:7-alpine
     container_name: ev_charger_redis
@@ -22,9 +19,6 @@ services:
     networks:
       - ev_charger_network
 
-  # -----------------------------------------------------
-  # 2. FastAPI Application Service
-  # -----------------------------------------------------
   api:
     build: .
     container_name: ev_charger_api
@@ -35,24 +29,17 @@ services:
              python init_db.py &&
              exec uvicorn app.main:app --host 0.0.0.0 --port 8000"
     env_file:
-      - .env
-    environment:
-      - DOCKER_ENV=true
-      - DATABASE_HOST=host.docker.internal
-      - REDIS_HOST=redis
-    ports:
-      - "8000:8000"
+      - .env   # .env에서 REDIS_HOST와 DOCKER_ENV 모두 관리
     depends_on:
       redis:
         condition: service_healthy
+    ports:
+      - "8000:8000"
     volumes:
       - .:/app
     networks:
       - ev_charger_network
 
-  # -----------------------------------------------------
-  # 3. Nginx Reverse Proxy Service
-  # -----------------------------------------------------
   nginx:
     image: nginx:alpine
     container_name: ev_charger_nginx
@@ -67,16 +54,10 @@ services:
     networks:
       - ev_charger_network
 
-# -----------------------------------------------------
-# Volumes
-# -----------------------------------------------------
 volumes:
   redis_data:
     driver: local
 
-# -----------------------------------------------------
-# Network
-# -----------------------------------------------------
 networks:
   ev_charger_network:
     driver: bridge
