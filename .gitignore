@@ -1,14 +1,69 @@
-# Python 캐시, pyc 파일 무시
+# --------------------------
+# Python / FastAPI 관련
+# --------------------------
 __pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+*.log
+*.pot
 *.pyc
 
-# 가상환경
-venv/
+# --------------------------
+# 환경 설정 파일
+# --------------------------
 .env
+.env.local
+.env.dev
+.env.test
+.env.prod
+.env.production
 
-# IDE 관련
+# --------------------------
+# IDE / 편집기
+# --------------------------
 .vscode/
+.idea/
+*.swp
+*.swo
+*.bak
+.DS_Store
+Thumbs.db
 *.iml
+*.ipr
+*.iws
 
-__pycache__/
-*.pyc
+# --------------------------
+# Docker
+# --------------------------
+/data/
+docker-compose.override.yml
+docker-compose.yml
+*.pid
+
+# --------------------------
+# 캐시 / 빌드 / 패키지
+# --------------------------
+build/
+dist/
+*.egg-info/
+*.eggs/
+.cache/
+.pytest_cache/
+pip-wheel-metadata/
+
+# --------------------------
+# Node / Frontend (만약 포함될 경우)
+# --------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --------------------------
+# 환경별 파일
+# --------------------------
+/config/
+serverinfo.dat

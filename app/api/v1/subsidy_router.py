@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 # ----------------------------------------------------------------
 # 프로젝트 내부 모듈 import
 # ----------------------------------------------------------------
-from app.database import get_async_session
+from app.db.database import get_async_session
 from app.schemas.subsidy import SubsidyPublic, SubsidyListResponse
 from app.services.subsidy_service import subsidy_service
 
