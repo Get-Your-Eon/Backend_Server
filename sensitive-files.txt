@@ -1,0 +1,6 @@
+.env
+serverinfo.dat
+__pycache__/
+*.pyc
+.idea/
+*.iml
