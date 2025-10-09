@@ -6,12 +6,30 @@ from typing import List, Optional
 from geoalchemy2 import Geometry
 from geoalchemy2.shape import to_shape
 from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, UniqueConstraint
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+# from sqlalchemy.ext.declarative import declarative_base # FastAPI/SQLAlchemy 2.0 권장: Base는 database.py에서 임포트하는 것이 일반적
+from sqlalchemy.orm import Mapped, mapped_column, relationship, declarative_base
 from sqlalchemy.sql import func
 
 # Base 클래스는 이 파일에서 모든 모델을 위해 정의됩니다.
+# (프로젝트 구조에 따라 database.py에서 import 하는 것이 일반적이나, 기존 구조를 유지합니다.)
 Base = declarative_base()
+
+# -----------------------------------------------------
+# Z. 사용자 (User) 모델 (🌟 새롭게 추가된 부분)
+# -----------------------------------------------------
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
+    # 비밀번호는 해시(암호화)하여 저장합니다.
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    # 🌟 역할 필드: 'admin' 또는 'user'로 권한을 구분합니다.
+    role: Mapped[str] = mapped_column(String(20), default="user", nullable=False, index=True)
+
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
 
 # -----------------------------------------------------
 # A. 충전소 (Stations) 모델
