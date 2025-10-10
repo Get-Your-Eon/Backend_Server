@@ -9,11 +9,11 @@ from sqlalchemy import text # 원시 SQL 쿼리를 실행하기 위해 text() �
 from geoalchemy2.functions import ST_Point
 
 # Redis 클라이언트 및 캐시 관리 함수 임포트
-from app.redis_client import get_cache, set_cache, get_redis_client
+from app.redis_client import get_cache, set_cache, get_redis_client # type: ignore
 
 # DB 모델 및 Mock API 임포트
-from app.models import Station, Charger
-from app.mock_api import get_mock_stations
+from app.models import Station, Charger # type: ignore
+from app.mock_api import get_mock_stations  # type: ignore
 
 # 캐시 만료 시간 설정
 CACHE_EXPIRE_SECONDS = 3600  # 1시간 캐시 유지

@@ -8,14 +8,14 @@ from sqlalchemy import text
 from redis.asyncio import Redis
 
 # 프로젝트 내부 모듈 임포트
-from app.core.config import settings
-from app.db.database import get_async_session
-from app.redis_client import (
-    init_redis_pool,
-    close_redis_pool,
-    get_redis_client,
-    set_cache,
-    get_cache
+from app.core.config import settings    # type: ignore
+from app.db.database import get_async_session# type: ignore
+from app.redis_client import (# type: ignore
+    init_redis_pool,# type: ignore
+    close_redis_pool,# type: ignore
+    get_redis_client,# type: ignore
+    set_cache,# type: ignore
+    get_cache# type: ignore
 )
 
 from app.api.v1.api import api_router

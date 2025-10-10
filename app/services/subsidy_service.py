@@ -1,8 +1,10 @@
 from typing import List
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import Subsidy  # Subsidy 모델 임포트
-from app.schemas.subsidy import SubsidyPublic  # 수정: SubsidyResponse → SubsidyPublic
+from app.models import Subsidy  # type: ignore
+# Subsidy 모델 임포트
+from app.schemas.subsidy import SubsidyPublic # type: ignore
+# 수정: SubsidyResponse → SubsidyPublic
 
 class SubsidyService:
     """
