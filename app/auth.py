@@ -6,9 +6,10 @@ from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 
-from app.schemas.user import TokenData, UserRole
-from app.core.config import settings
-from app.db.repository.user import get_user_by_username # 사용자 레포지토리에서 가져옴
+from app.schemas.user import TokenData, UserRole# type: ignore
+from app.core.config import settings# type: ignore
+from app.db.repository.user import get_user_by_username # type: ignore
+# 사용자 레포지토리에서 가져옴
 
 
 from sqlalchemy.ext.asyncio import AsyncSession
