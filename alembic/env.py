@@ -12,7 +12,7 @@ from alembic import context
 # 1. 환경 설정 및 모델 임포트
 # ----------------------------------------------------
 
-# .env 파일 로드 (config에서 이미 했지만, alembic 단독 실행을 위해 유지)
+# .env.production 파일 로드 (config에서 이미 했지만, alembic 단독 실행을 위해 유지)
 load_dotenv()
 
 # 프로젝트 루트 경로를 시스템 경로에 추가

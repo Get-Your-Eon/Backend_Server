@@ -12,7 +12,7 @@ async def init_redis_pool():
             host=settings.REDIS_HOST,
             port=settings.REDIS_PORT,
             db=0,
-            password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None,
+            password=settings.REDIS_PASSWORD or None,
             decode_responses=True,
         )
         await redis_pool.ping()
