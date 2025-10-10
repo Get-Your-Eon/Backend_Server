@@ -5,6 +5,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os
 
+# --------------------------
+# .env 파일 로드
+# --------------------------
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 load_dotenv(dotenv_path=BASE_DIR / ".env", override=True)
 
@@ -58,24 +61,26 @@ class Settings(BaseSettings):
         env = values.ENVIRONMENT.lower()
 
         if env == "development":
-            # 로컬 실행 시
+            # ✅ 로컬 실행 시
             values.REDIS_HOST = "localhost"
             values.REDIS_PORT = 6379
             values.REDIS_PASSWORD = None
 
         elif env == "docker":
-            # Docker Compose 내부 실행 시
+            # ✅ Docker Compose 실행 시
             values.REDIS_HOST = "ev_charger_redis"
             values.REDIS_PORT = 6379
             values.REDIS_PASSWORD = None
 
         elif env == "production":
-            # Render 환경에서 Managed Redis internal URL 사용
-            # 반드시 Render Dashboard에서 환경 변수로 REDIS_HOST, REDIS_PORT, REDIS_PASSWORD 설정 필요
-            values.REDIS_HOST = os.getenv("REDIS_HOST", values.REDIS_HOST)
-            values.REDIS_PORT = int(os.getenv("REDIS_PORT", values.REDIS_PORT or 6379))
-            values.REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", values.REDIS_PASSWORD)
+            # ✅ Render 환경 — .env.production 혹은 Render Dashboard 값 그대로 사용
+            #   (덮어쓰기 X)
+            print(f"🔧 Production mode detected — Using Redis at {values.REDIS_HOST}:{values.REDIS_PORT}")
 
         return values
 
+
+# --------------------------
+# 설정 인스턴스 생성
+# --------------------------
 settings = Settings()
