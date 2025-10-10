@@ -2,8 +2,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 import os
 
 class Settings(BaseSettings):
-    # .env 파일 로드, Docker에서는 환경 변수 직접 주입 가능
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # .env.production 파일 로드, Docker에서는 환경 변수 직접 주입 가능
+    model_config = SettingsConfigDict(env_file=".env.production", extra="ignore")
 
     # --------------------------
     # 기본 프로젝트 설정
