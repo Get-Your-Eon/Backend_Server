@@ -58,7 +58,7 @@ class Settings(BaseSettings):
         env = values.ENVIRONMENT.lower()
 
         if env == "development":
-            # 로컬 실행 시 (ex. uvicorn app.main:app --reload)
+            # 로컬 실행 시
             values.REDIS_HOST = "localhost"
             values.REDIS_PORT = 6379
             values.REDIS_PASSWORD = None
@@ -70,9 +70,11 @@ class Settings(BaseSettings):
             values.REDIS_PASSWORD = None
 
         elif env == "production":
-            # Render 환경 (Render에서 제공하는 Redis 주소 사용)
-            # .env의 설정값 그대로 사용
-            pass
+            # Render 환경에서 Managed Redis internal URL 사용
+            # 반드시 Render Dashboard에서 환경 변수로 REDIS_HOST, REDIS_PORT, REDIS_PASSWORD 설정 필요
+            values.REDIS_HOST = os.getenv("REDIS_HOST", values.REDIS_HOST)
+            values.REDIS_PORT = int(os.getenv("REDIS_PORT", values.REDIS_PORT or 6379))
+            values.REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", values.REDIS_PASSWORD)
 
         return values
 
