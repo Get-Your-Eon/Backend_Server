@@ -1,11 +1,4 @@
-"""Create station, charger, and api_log tables
-
-Revision ID: 60afb71f58fe
-Revises:
-Create Date: 2025-10-05 17:43:12.671323
-"""
 from typing import Sequence, Union
-
 from alembic import op
 import sqlalchemy as sa
 from geoalchemy2 import Geometry
@@ -19,8 +12,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema safely."""
-    # api_logs 테이블 생성 (존재하지 않을 경우만)
-    op.execute("""
+    conn = op.get_bind()
+
+    # api_logs 테이블 생성
+    conn.execute("""
     CREATE TABLE IF NOT EXISTS api_logs (
         id SERIAL PRIMARY KEY,
         endpoint VARCHAR,
@@ -33,21 +28,13 @@ def upgrade() -> None:
         response_time_ms FLOAT
     );
     """)
-    # api_logs 인덱스 안전하게 생성
-    op.execute("""
-    DO $$
-    BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname='ix_api_logs_id') THEN
-            CREATE INDEX ix_api_logs_id ON api_logs(id);
-        END IF;
-    END$$;
-    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_api_logs_id ON api_logs(id);")
 
     # stations 테이블 생성
-    op.execute("""
+    conn.execute("""
     CREATE TABLE IF NOT EXISTS stations (
         id SERIAL PRIMARY KEY,
-        station_code VARCHAR(50) NOT NULL,
+        station_code VARCHAR(50) NOT NULL UNIQUE,
         name VARCHAR(200) NOT NULL,
         address TEXT,
         location GEOMETRY(POINT, 4326),
@@ -56,24 +43,12 @@ def upgrade() -> None:
         updated_at TIMESTAMP NOT NULL DEFAULT now()
     );
     """)
-    # stations 인덱스 안전하게 생성
-    op.execute("""
-    DO $$
-    BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname='ix_stations_station_code') THEN
-            CREATE UNIQUE INDEX ix_stations_station_code ON stations(station_code);
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname='ix_stations_id') THEN
-            CREATE INDEX ix_stations_id ON stations(id);
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname='idx_stations_location') THEN
-            CREATE INDEX idx_stations_location ON stations USING gist(location);
-        END IF;
-    END$$;
-    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_stations_station_code ON stations(station_code);")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_stations_id ON stations(id);")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_stations_location ON stations USING gist(location);")
 
     # chargers 테이블 생성
-    op.execute("""
+    conn.execute("""
     CREATE TABLE IF NOT EXISTS chargers (
         id SERIAL PRIMARY KEY,
         station_id INTEGER NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
@@ -86,23 +61,13 @@ def upgrade() -> None:
         updated_at TIMESTAMP NOT NULL DEFAULT now()
     );
     """)
-    # chargers 인덱스 안전하게 생성
-    op.execute("""
-    DO $$
-    BEGIN
-        IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname='ix_chargers_id') THEN
-            CREATE INDEX ix_chargers_id ON chargers(id);
-        END IF;
-        IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname='ix_chargers_station_id') THEN
-            CREATE INDEX ix_chargers_station_id ON chargers(station_id);
-        END IF;
-    END$$;
-    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_chargers_id ON chargers(id);")
+    conn.execute("CREATE INDEX IF NOT EXISTS ix_chargers_station_id ON chargers(station_id);")
 
 
 def downgrade() -> None:
     """Downgrade schema safely."""
-    # 테이블 삭제 시 CASCADE 적용
-    op.execute("DROP TABLE IF EXISTS chargers CASCADE;")
-    op.execute("DROP TABLE IF EXISTS stations CASCADE;")
-    op.execute("DROP TABLE IF EXISTS api_logs CASCADE;")
+    conn = op.get_bind()
+    conn.execute("DROP TABLE IF EXISTS chargers CASCADE;")
+    conn.execute("DROP TABLE IF EXISTS stations CASCADE;")
+    conn.execute("DROP TABLE IF EXISTS api_logs CASCADE;")
