@@ -7,10 +7,10 @@ import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-# ENVIRONMENT 확인 후 해당 .env 로드
+# ENVIRONMENT 확인 후 해당 .env 로드 (로컬 개발용만 참고)
 ENV = os.getenv("ENVIRONMENT", "development").lower()
-env_file = ".env.production" if ENV == "production" else ".env.development"
-load_dotenv(dotenv_path=BASE_DIR / env_file, override=True)
+if ENV == "development":
+    load_dotenv(dotenv_path=BASE_DIR / ".env.development", override=True)
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file_encoding="utf-8", extra="ignore")
@@ -41,24 +41,29 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def switch_hosts(cls, values):
         env = values.ENVIRONMENT.lower()
-        # 로컬 개발
+
         if env == "development":
+            # 로컬 개발
             values.REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
             values.REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
             values.REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
-        # Docker Compose 내부 실행
+
         elif env == "docker":
+            # Docker Compose 내부 실행
             values.REDIS_HOST = os.getenv("REDIS_HOST", "ev_charger_redis")
             values.REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
             values.REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
-            # Docker 내부에서 DB는 호스트 머신 바라보기
             if not os.getenv("DATABASE_URL"):
                 db_host = os.getenv("DATABASE_HOST", "host.docker.internal")
-                values.DATABASE_URL = f"postgresql://postgres:postgres@{db_host}:5432/Codyssey_Team_A"
-        # Render / Production 환경
+                values.DATABASE_URL = f"postgresql+asyncpg://postgres:postgres@{db_host}:5432/Codyssey_Team_A"
+
         elif env == "production":
-            # .env.production 값 그대로 사용
-            pass
+            # Render 환경에서는 Render 환경변수를 그대로 사용
+            values.REDIS_HOST = os.getenv("REDIS_HOST")
+            values.REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+            values.REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+            values.DATABASE_URL = os.getenv("DATABASE_URL")
+
         return values
 
 settings = Settings()
