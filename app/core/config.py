@@ -41,16 +41,23 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def switch_hosts(cls, values):
         env = values.ENVIRONMENT.lower()
+        # 로컬 개발
         if env == "development":
-            values.REDIS_HOST = "localhost"
-            values.REDIS_PORT = 6379
-            values.REDIS_PASSWORD = None
+            values.REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+            values.REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+            values.REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+        # Docker Compose 내부 실행
         elif env == "docker":
-            values.REDIS_HOST = "ev_charger_redis"
-            values.REDIS_PORT = 6379
-            values.REDIS_PASSWORD = None
+            values.REDIS_HOST = os.getenv("REDIS_HOST", "ev_charger_redis")
+            values.REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
+            values.REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
+            # Docker 내부에서 DB는 호스트 머신 바라보기
+            if not os.getenv("DATABASE_URL"):
+                db_host = os.getenv("DATABASE_HOST", "host.docker.internal")
+                values.DATABASE_URL = f"postgresql://postgres:postgres@{db_host}:5432/Codyssey_Team_A"
+        # Render / Production 환경
         elif env == "production":
-            # Render 환경에서는 .env.production 값 그대로 사용
+            # .env.production 값 그대로 사용
             pass
         return values
 
