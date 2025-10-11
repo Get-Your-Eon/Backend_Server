@@ -94,12 +94,18 @@ app.include_router(admin_router, prefix="/admin")
 async def db_test_endpoint(test_value: str = "1", db: AsyncSession = Depends(get_async_session)):
     """
     test_value를 받아서 SELECT 쿼리 실행
-    예: /db-test?test_value=123
+    문자열 또는 숫자 모두 안전하게 처리
+    예: /db-test?test_value=123 또는 /db-test?test_value=abc
     """
     start_time = time.time()
     try:
-        # 문자열로 바인딩 쿼리
-        result = await db.execute(text("SELECT :val"), {"val": test_value})
+        # 숫자로 변환 가능하면 int로, 불가하면 문자열 그대로 사용
+        try:
+            val_to_query = int(test_value)
+        except ValueError:
+            val_to_query = test_value
+
+        result = await db.execute(text("SELECT :val"), {"val": val_to_query})
         scalar_result = result.scalar_one()
         response_time_ms = (time.time() - start_time) * 1000
         return {
