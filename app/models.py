@@ -1,39 +1,27 @@
 from __future__ import annotations
-
 import datetime
 from typing import List, Optional
 
 from geoalchemy2 import Geometry
 from geoalchemy2.shape import to_shape
 from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, UniqueConstraint
-# from sqlalchemy.ext.declarative import declarative_base # FastAPI/SQLAlchemy 2.0 권장: Base는 database.py에서 임포트하는 것이 일반적
 from sqlalchemy.orm import Mapped, mapped_column, relationship, declarative_base
 from sqlalchemy.sql import func
 
-# Base 클래스는 이 파일에서 모든 모델을 위해 정의됩니다.
-# (프로젝트 구조에 따라 database.py에서 import 하는 것이 일반적이나, 기존 구조를 유지합니다.)
 Base = declarative_base()
 
-# -----------------------------------------------------
-# Z. 사용자 (User) 모델 (🌟 새롭게 추가된 부분)
-# -----------------------------------------------------
+# ------------------ User ------------------
 class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     username: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
-    # 비밀번호는 해시(암호화)하여 저장합니다.
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    # 🌟 역할 필드: 'admin' 또는 'user'로 권한을 구분합니다.
     role: Mapped[str] = mapped_column(String(20), default="user", nullable=False, index=True)
-
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
-
-# -----------------------------------------------------
-# A. 충전소 (Stations) 모델
-# -----------------------------------------------------
+# ------------------ Station ------------------
 class Station(Base):
     __tablename__ = "stations"
 
@@ -51,21 +39,13 @@ class Station(Base):
 
     @property
     def latitude(self) -> Optional[float]:
-        if self.location:
-            # geoalchemy2.shape.to_shape는 이미 임포트되어 있음
-            return to_shape(self.location).y
-        return None
+        return to_shape(self.location).y if self.location else None
 
     @property
     def longitude(self) -> Optional[float]:
-        if self.location:
-            return to_shape(self.location).x
-        return None
+        return to_shape(self.location).x if self.location else None
 
-
-# -----------------------------------------------------
-# B. 충전기 (Chargers) 모델
-# -----------------------------------------------------
+# ------------------ Charger ------------------
 class Charger(Base):
     __tablename__ = "chargers"
 
@@ -76,18 +56,13 @@ class Charger(Base):
     connector_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     output_kw: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     status_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     __table_args__ = (UniqueConstraint('station_id', 'charger_code', name='_station_charger_uc'),)
-
     station: Mapped['Station'] = relationship(back_populates="chargers")
 
-
-# -----------------------------------------------------
-# C. API 로그 (ApiLog) 모델
-# -----------------------------------------------------
+# ------------------ ApiLog ------------------
 class ApiLog(Base):
     __tablename__ = "api_logs"
 
@@ -99,17 +74,14 @@ class ApiLog(Base):
     response_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     response_msg: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 
-
-# -----------------------------------------------------
-# D. 보조금 (Subsidy) 모델
-# -----------------------------------------------------
+# ------------------ Subsidy ------------------
 class Subsidy(Base):
     __tablename__ = "subsidies"
 
     id = Column(Integer, primary_key=True, index=True)
-    manufacturer = Column(String, index=True, nullable=False) # 제조사 (예: 현대자동차)
-    model_group = Column(String, index=True, nullable=False)    # 모델 그룹 (예: GV60)
-    model_name = Column(String, unique=True, nullable=False)    # 세부 모델명 (풀 스펙)
-    subsidy_national_10k_won = Column(Integer, nullable=False)   # 국고 보조금 (만원 단위)
-    subsidy_local_10k_won = Column(Integer, nullable=False)      # 지자체 보조금 (만원 단위)
-    subsidy_total_10k_won = Column(Integer, nullable=False)      # 총 보조금 (만원 단위)
+    manufacturer = Column(String, index=True, nullable=False)
+    model_group = Column(String, index=True, nullable=False)
+    model_name = Column(String, unique=True, nullable=False)
+    subsidy_national_10k_won = Column(Integer, nullable=False)
+    subsidy_local_10k_won = Column(Integer, nullable=False)
+    subsidy_total_10k_won = Column(Integer, nullable=False)

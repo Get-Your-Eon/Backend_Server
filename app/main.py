@@ -3,7 +3,7 @@ import time
 from datetime import datetime
 import os
 
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, APIRouter
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,16 +11,16 @@ from sqlalchemy import text
 from redis.asyncio import Redis
 
 # 프로젝트 내부 모듈 임포트
-from app.core.config import settings    # type: ignore
-from app.db.database import get_async_session # type: ignore
-from app.redis_client import (  # type: ignore
-    init_redis_pool,    # type: ignore
-    close_redis_pool,   # type: ignore
-    get_redis_client,   # type: ignore
-    set_cache,  # type: ignore
-    get_cache   # type: ignore
+from app.core.config import settings
+from app.db.database import get_async_session
+from app.redis_client import (
+    init_redis_pool,
+    close_redis_pool,
+    get_redis_client,
+    set_cache,
+    get_cache
 )
-from app.api.v1.api import api_router   # type: ignore
+from app.api.v1.api import api_router
 
 # --- 환경 변수로 관리자 모드 판단 ---
 IS_ADMIN = os.getenv("ADMIN_MODE", "false").lower() == "true"
@@ -35,7 +35,7 @@ async def lifespan(app: FastAPI):
     print("Application shutdown: Cleaning up resources...")
     await close_redis_pool()
 
-# --- HTTP Basic 인증 (관리자 전용, 다중 계정 지원) ---
+# --- HTTP Basic 인증 (관리자 전용) ---
 security = HTTPBasic()
 raw_admins = os.getenv("ADMIN_CREDENTIALS", "")
 ADMIN_ACCOUNTS = dict([cred.split(":") for cred in raw_admins.split(",") if cred])
@@ -51,15 +51,13 @@ app = FastAPI(
     version=settings.API_VERSION,
     description="Codyssey EV Charging Station API",
     lifespan=lifespan,
-    docs_url=None,    # docs URL을 직접 라우트로 재정의
+    docs_url=None,
     redoc_url=None,
     openapi_url="/openapi.json" if IS_ADMIN else None
 )
 
 # --- 관리자용 docs & redoc 엔드포인트 ---
 if IS_ADMIN:
-    from fastapi import APIRouter
-
     @app.get("/docs", include_in_schema=False)
     async def get_docs(credentials: HTTPBasicCredentials = Depends(admin_required)):
         return get_swagger_ui_html(openapi_url=app.openapi_url, title=f"{settings.PROJECT_NAME} - Swagger UI")
@@ -92,14 +90,9 @@ app.include_router(admin_router, prefix="/admin")
 # --- DB 연결 테스트 엔드포인트 ---
 @app.get("/db-test", tags=["Infrastructure"], summary="DB 연결 및 쿼리 테스트")
 async def db_test_endpoint(test_value: str = "1", db: AsyncSession = Depends(get_async_session)):
-    """
-    test_value를 받아서 SELECT 쿼리 실행
-    문자열 또는 숫자 모두 안전하게 처리
-    예: /db-test?test_value=123 또는 /db-test?test_value=abc
-    """
     start_time = time.time()
     try:
-        # 숫자로 변환 가능하면 int로, 불가하면 문자열 그대로 사용
+        # 문자열 → int 변환 가능하면 int로 사용, 아니면 그대로 문자열
         try:
             val_to_query = int(test_value)
         except ValueError:
