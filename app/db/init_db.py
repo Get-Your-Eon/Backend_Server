@@ -15,32 +15,39 @@ import asyncpg
 
 # 프로젝트 내부 모듈 임포트
 # NOTE: 이 스크립트는 프로젝트 루트에서 실행되므로 절대 경로 임포트를 사용합니다.
-from app.config import settings
 from app.models import Base, Station, Charger
 from app.mock_api import MOCK_STATIONS_DATA # Mock API에서 초기 데이터 로드
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# 비동기 엔진 생성
-DATABASE_URL = settings.DATABASE_URL # -> "postgresql+asyncpg://..."
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=True,
-)
-AsyncSessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine,
-    class_=AsyncSession,
-    expire_on_commit=False,
-)
+# 엔진과 세션팩토리 생성은 런타임에 지연하여
+# 모듈 import 시점에 pydantic Settings의 ValidationError가 발생하지 않도록 함
+def get_engine_and_session():
+    """Settings를 런타임에 불러와 비동기 엔진과 세션팩토리를 반환합니다."""
+    from app.core.config import settings
+
+    DATABASE_URL = settings.DATABASE_URL  # -> "postgresql+asyncpg://..."
+    engine = create_async_engine(
+        DATABASE_URL,
+        echo=True,
+    )
+    AsyncSessionLocal = sessionmaker(
+        autocommit=False,
+        autoflush=False,
+        bind=engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    return engine, AsyncSessionLocal
 
 async def init_db():
     """데이터베이스 테이블 생성 및 초기 데이터 삽입"""
     logger.info("Starting database initialization...")
 
     # 1. 테이블 생성 (데이터베이스에 존재하지 않는 경우)
+    engine, AsyncSessionLocal = get_engine_and_session()
+
     async with engine.begin() as conn:
         # PostgreSQL에 PostGIS 확장이 설치되어 있는지 확인하고 활성화
         # NOTE: 이 부분에서 데이터베이스 연결 권한 문제가 발생할 수 있습니다.
