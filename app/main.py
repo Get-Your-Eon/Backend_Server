@@ -91,17 +91,29 @@ app.include_router(admin_router, prefix="/admin")
 
 # --- DB 연결 테스트 엔드포인트 ---
 @app.get("/db-test", tags=["Infrastructure"], summary="DB 연결 및 쿼리 테스트")
-async def db_test_endpoint(db: AsyncSession = Depends(get_async_session)):
+async def db_test_endpoint(test_value: int = 1, db: AsyncSession = Depends(get_async_session)):
+    """
+    test_value를 받아서 SELECT 쿼리 실행
+    예: /db-test?test_value=123
+    """
     start_time = time.time()
     try:
-        result = await db.execute(text("SELECT 1"))
-        if result.scalar_one():
-            response_time_ms = (time.time() - start_time) * 1000
-            return {"message": "Database connection test successful!", "status": "ok", "response_time_ms": f"{response_time_ms:.2f}"}
-        else:
-            raise Exception("Unexpected SQL result.")
+        # 파라미터 바인딩 쿼리
+        result = await db.execute(text("SELECT :val"), {"val": test_value})
+        scalar_result = result.scalar_one()
+        response_time_ms = (time.time() - start_time) * 1000
+        return {
+            "message": "Database connection test successful!",
+            "status": "ok",
+            "test_value": test_value,
+            "db_result": scalar_result,
+            "response_time_ms": f"{response_time_ms:.2f}"
+        }
     except Exception as e:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Database connection failed: {e.__class__.__name__}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Database connection failed: {e.__class__.__name__}: {e}"
+        )
 
 # --- Redis 연결 테스트 엔드포인트 ---
 @app.get("/redis-test", tags=["Infrastructure"], summary="Redis 캐시 연결 테스트")
