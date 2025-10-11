@@ -87,32 +87,37 @@ async def admin_data():
 
 app.include_router(admin_router, prefix="/admin")
 
-# --- DB 연결 테스트 엔드포인트 ---
-@app.get("/db-test", tags=["Infrastructure"], summary="DB 연결 및 쿼리 테스트")
-async def db_test_endpoint(test_value: str = "1", db: AsyncSession = Depends(get_async_session)):
+# --- DB 연결 테스트 / 간단 조회 엔드포인트 ---
+@app.get("/db-test", tags=["Infrastructure"], summary="DB 연결 및 보조금(subsidy) 조회 테스트")
+async def db_test_endpoint(manufacturer: str, model_group: str, db: AsyncSession = Depends(get_async_session)):
+    """제조사(manufacturer)와 모델그룹(model_group)을 받아 `subsidies` 테이블을 조회합니다.
+
+    이 엔드포인트는 OpenAPI 문서에서 두 개의 문자열 쿼리 파라미터로 노출됩니다.
+    """
     start_time = time.time()
     try:
-        try:
-            val_to_query = int(test_value)
-        except ValueError:
-            val_to_query = test_value
-
-        # 핵심 수정 포인트 👇
-        result = await db.execute(text("SELECT :val::text"), {"val": val_to_query})
-        scalar_result = result.scalar_one()
+        # 안전한 파라미터 바인딩으로 쿼리 실행
+        query = text(
+            "SELECT manufacturer, model_group, model_name, subsidy_total_10k_won FROM subsidies "
+            "WHERE manufacturer = :manufacturer AND model_group = :model_group LIMIT 50"
+        )
+        result = await db.execute(query, {"manufacturer": manufacturer, "model_group": model_group})
+        rows = result.fetchall()
 
         response_time_ms = (time.time() - start_time) * 1000
         return {
-            "message": "Database connection test successful!",
+            "message": "Database query executed",
             "status": "ok",
-            "test_value": test_value,
-            "db_result": scalar_result,
+            "manufacturer": manufacturer,
+            "model_group": model_group,
+            "count": len(rows),
+            "rows": [dict(row._mapping) for row in rows],
             "response_time_ms": f"{response_time_ms:.2f}"
         }
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Database connection failed: {e.__class__.__name__}: {e}"
+            detail=f"Database query failed: {e.__class__.__name__}: {e}"
         )
 
 
