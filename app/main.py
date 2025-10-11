@@ -92,14 +92,15 @@ app.include_router(admin_router, prefix="/admin")
 async def db_test_endpoint(test_value: str = "1", db: AsyncSession = Depends(get_async_session)):
     start_time = time.time()
     try:
-        # 문자열 → int 변환 가능하면 int로 사용, 아니면 그대로 문자열
         try:
             val_to_query = int(test_value)
         except ValueError:
             val_to_query = test_value
 
-        result = await db.execute(text("SELECT :val"), {"val": val_to_query})
+        # 핵심 수정 포인트 👇
+        result = await db.execute(text("SELECT :val::text"), {"val": val_to_query})
         scalar_result = result.scalar_one()
+
         response_time_ms = (time.time() - start_time) * 1000
         return {
             "message": "Database connection test successful!",
@@ -113,6 +114,7 @@ async def db_test_endpoint(test_value: str = "1", db: AsyncSession = Depends(get
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Database connection failed: {e.__class__.__name__}: {e}"
         )
+
 
 # --- Redis 연결 테스트 엔드포인트 ---
 @app.get("/redis-test", tags=["Infrastructure"], summary="Redis 캐시 연결 테스트")
