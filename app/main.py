@@ -98,20 +98,32 @@ async def db_test_endpoint(manufacturer: str, model_group: str, db: AsyncSession
     try:
         # 안전한 파라미터 바인딩으로 쿼리 실행
         query = text(
-            "SELECT manufacturer, model_group, model_name, subsidy_total_10k_won FROM subsidies "
+            "SELECT model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won "
+            "FROM subsidies "
             "WHERE manufacturer = :manufacturer AND model_group = :model_group LIMIT 50"
         )
         result = await db.execute(query, {"manufacturer": manufacturer, "model_group": model_group})
         rows = result.fetchall()
 
         response_time_ms = (time.time() - start_time) * 1000
+        # Map DB columns to frontend-friendly Korean keys
+        mapped_rows = []
+        for row in rows:
+            m = row._mapping
+            mapped_rows.append({
+                "모델명": m.get("model_name"),
+                "국비(만원)": m.get("subsidy_national_10k_won"),
+                "지방비(만원)": m.get("subsidy_local_10k_won"),
+                "보조금(만원)": m.get("subsidy_total_10k_won"),
+            })
+
         return {
             "message": "Database query executed",
             "status": "ok",
             "manufacturer": manufacturer,
             "model_group": model_group,
-            "count": len(rows),
-            "rows": [dict(row._mapping) for row in rows],
+            "count": len(mapped_rows),
+            "rows": mapped_rows,
             "response_time_ms": f"{response_time_ms:.2f}"
         }
     except Exception as e:
