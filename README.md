@@ -126,4 +126,26 @@ gunicorn -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT app.main:app
 - `ADMIN_CREDENTIALS`를 평문으로 두지 말고 Render Secrets(환경변수 암호화 기능)을 사용하세요.
 - `SECRET_KEY`는 반드시 안전하게 보관하세요.
 
+## Uptime & cold start 방지
+
+Render의 무료(혹은 일부 설정된) 인스턴스는 일정 시간 동안 트래픽이 없으면 인스턴스를 정지시키거나 cold start가 발생할 수 있습니다. 서비스 응답 지연/초기화 비용을 줄이기 위해 UptimeRobot 같은 외부 모니터링 서비스를로 주기적으로 ping을 보내 인스턴스를 깨워두는 패턴을 사용할 수 있습니다.
+
+권장 설정 예시 (UptimeRobot):
+
+- 모니터 타입: HTTP(s)
+- 체크 URL: `https://<your-service>.onrender.com/` 또는 `/health` (권장)
+- 주기: 5분
+- 요청 방식: HEAD (가볍게 요청하기 위해)
+
+우리 서비스에 적용된 변경 사항
+
+- `/` 경로에 대한 `HEAD` 요청을 명시적으로 200 응답으로 처리하도록 서버에서 핸들러를 추가했습니다. 따라서 UptimeRobot의 HEAD ping이 405를 반환하지 않고 200을 받게 되어 안정적으로 인스턴스를 깨울 수 있습니다.
+- 보다 명확한 상태 확인이 필요하면 별도의 `/health` GET 엔드포인트를 만들어 사용하세요(예: DB, Redis 연결 상태를 JSON으로 반환).
+
+주의사항
+
+- 너무 짧은 주기로 빈번히 ping을 보내면 비용 혹은 rate-limit 이슈가 발생할 수 있으니 5분 정도의 간격을 권장합니다.
+- 보안상 `/health`를 공개할 경우 민감 정보를 노출하지 않도록 주의하세요(간단한 OK/status만 반환).
+
+
 문제가 있거나 시작 스크립스를 수정하길 원하시면 어떤 Start Command를 사용 중인지(또는 Render 서비스 URL/설정) 알려주시면 맞춤형으로 조정해 드리겠습니다.
