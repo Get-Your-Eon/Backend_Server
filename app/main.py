@@ -3,8 +3,9 @@ import time
 from datetime import datetime
 import os
 
-from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response
+from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Header
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +47,30 @@ def admin_required(credentials: HTTPBasicCredentials = Depends(security)):
         raise HTTPException(status_code=401, detail="Unauthorized")
     return True
 
+
+# --- API Key auth for frontend clients ---
+def get_frontend_api_keys():
+    raw = os.getenv("FRONTEND_API_KEYS", "")
+    return [k.strip() for k in raw.split(",") if k.strip()]
+
+def frontend_api_key_required(x_api_key: str = Header(...)):
+    keys = get_frontend_api_keys()
+    if not keys:
+        # no keys configured -> deny
+        raise HTTPException(status_code=403, detail="API keys not configured")
+    if x_api_key not in keys:
+        raise HTTPException(status_code=403, detail="Invalid API key")
+    return True
+
+
+def ensure_read_only_sql(sql: str):
+    """Basic guard to ensure the provided SQL starts with SELECT to avoid write queries.
+
+    This is a defensive, best-effort check and should be combined with parameterized queries and DB user permissions.
+    """
+    if not sql.strip().lower().startswith("select"):
+        raise HTTPException(status_code=400, detail="Only read-only SELECT queries are allowed")
+
 # --- FastAPI Application 생성 ---
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -56,6 +81,22 @@ app = FastAPI(
     redoc_url=None,
     openapi_url="/openapi.json" if IS_ADMIN else None
 )
+
+# --- CORS: restrict origins to allowed list from env ---
+allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
+if allowed_origins_env:
+    allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
+else:
+    allowed_origins = []
+
+if allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allowed_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "HEAD", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
 # --- 관리자용 docs & redoc 엔드포인트 ---
 if IS_ADMIN:
@@ -123,7 +164,7 @@ async def health_check(db: AsyncSession = Depends(get_async_session), redis_clie
 
 
 @app.get("/subsidy", tags=["Subsidy"], summary="Lookup subsidies by manufacturer and model_group")
-async def subsidy_lookup(manufacturer: str, model_group: str, db: AsyncSession = Depends(get_async_session)):
+async def subsidy_lookup(manufacturer: str, model_group: str, db: AsyncSession = Depends(get_async_session), _ok: bool = Depends(frontend_api_key_required)):
     """Return subsidy rows for given manufacturer and model_group.
 
     Response format (list of objects):
@@ -138,13 +179,14 @@ async def subsidy_lookup(manufacturer: str, model_group: str, db: AsyncSession =
     ]
     """
     try:
-        query = text(
+        query_sql = (
             "SELECT model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won "
             "FROM subsidies "
             "WHERE manufacturer = :manufacturer AND model_group = :model_group "
             "ORDER BY model_name LIMIT 100"
         )
-        result = await db.execute(query, {"manufacturer": manufacturer, "model_group": model_group})
+        ensure_read_only_sql(query_sql)
+        result = await db.execute(text(query_sql), {"manufacturer": manufacturer, "model_group": model_group})
         rows = result.fetchall()
 
         mapped = []
@@ -179,20 +221,22 @@ app.include_router(admin_router, prefix="/admin")
 
 # --- DB 연결 테스트 / 간단 조회 엔드포인트 ---
 @app.get("/db-test", tags=["Infrastructure"], summary="DB 연결 및 보조금(subsidy) 조회 테스트")
-async def db_test_endpoint(manufacturer: str, model_group: str, db: AsyncSession = Depends(get_async_session)):
+async def db_test_endpoint(manufacturer: str, model_group: str, db: AsyncSession = Depends(get_async_session), _ok: bool = Depends(frontend_api_key_required)):
     """제조사(manufacturer)와 모델그룹(model_group)을 받아 `subsidies` 테이블을 조회합니다.
 
     이 엔드포인트는 OpenAPI 문서에서 두 개의 문자열 쿼리 파라미터로 노출됩니다.
     """
+    _ok: bool = Depends(frontend_api_key_required)
     start_time = time.time()
     try:
         # 안전한 파라미터 바인딩으로 쿼리 실행
-        query = text(
+        query_sql = (
             "SELECT model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won "
             "FROM subsidies "
             "WHERE manufacturer = :manufacturer AND model_group = :model_group LIMIT 50"
         )
-        result = await db.execute(query, {"manufacturer": manufacturer, "model_group": model_group})
+        ensure_read_only_sql(query_sql)
+        result = await db.execute(text(query_sql), {"manufacturer": manufacturer, "model_group": model_group})
         rows = result.fetchall()
 
         response_time_ms = (time.time() - start_time) * 1000
