@@ -121,6 +121,50 @@ async def health_check(db: AsyncSession = Depends(get_async_session), redis_clie
 
     return JSONResponse(status_code=code, content={"status": status_str, "db": db_ok, "redis": redis_ok})
 
+
+@app.get("/subsidy", tags=["Subsidy"], summary="Lookup subsidies by manufacturer and model_group")
+async def subsidy_lookup(manufacturer: str, model_group: str, db: AsyncSession = Depends(get_async_session)):
+    """Return subsidy rows for given manufacturer and model_group.
+
+    Response format (list of objects):
+    [
+      {
+        "model_name": str,
+        "subsidy_national": int,
+        "subsidy_local": int,
+        "subsidy_total": int
+      },
+      ...
+    ]
+    """
+    try:
+        query = text(
+            "SELECT model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won "
+            "FROM subsidies "
+            "WHERE manufacturer = :manufacturer AND model_group = :model_group "
+            "ORDER BY model_name LIMIT 100"
+        )
+        result = await db.execute(query, {"manufacturer": manufacturer, "model_group": model_group})
+        rows = result.fetchall()
+
+        mapped = []
+        for r in rows:
+            m = r._mapping
+            # convert to ints if not None
+            nat = m.get("subsidy_national_10k_won")
+            loc = m.get("subsidy_local_10k_won")
+            tot = m.get("subsidy_total_10k_won")
+            mapped.append({
+                "model_name": m.get("model_name"),
+                "subsidy_national": int(nat) if nat is not None else None,
+                "subsidy_local": int(loc) if loc is not None else None,
+                "subsidy_total": int(tot) if tot is not None else None,
+            })
+
+        return JSONResponse(status_code=200, content=mapped)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- V1 API 라우터 포함 (일반 사용자 접근 가능) ---
 app.include_router(api_router, prefix="/api/v1")
 
