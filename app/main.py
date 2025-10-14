@@ -125,6 +125,7 @@ def head_root():
 
 
 @app.get("/health", tags=["Infrastructure"], summary="Health check (DB & Redis)")
+@app.head("/health")    
 async def health_check(db: AsyncSession = Depends(get_async_session), redis_client: Redis = Depends(get_redis_client)):
     """Simple health check endpoint. Returns 200 if at least one of DB/Redis responds, 503 if both fail.
 
