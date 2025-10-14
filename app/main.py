@@ -4,6 +4,7 @@ from datetime import datetime
 import os
 
 from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -80,6 +81,45 @@ def read_root():
 def head_root():
     """Explicit HEAD handler to make uptime probes (HEAD) return 200 without body."""
     return Response(status_code=200)
+
+
+@app.get("/health", tags=["Infrastructure"], summary="Health check (DB & Redis)")
+async def health_check(db: AsyncSession = Depends(get_async_session), redis_client: Redis = Depends(get_redis_client)):
+    """Simple health check endpoint. Returns 200 if at least one of DB/Redis responds, 503 if both fail.
+
+    Response body example:
+    {
+      "status": "ok",
+      "db": true,
+      "redis": true
+    }
+    """
+    db_ok = False
+    redis_ok = False
+
+    # DB check
+    try:
+        await db.execute(text("SELECT 1"))
+        db_ok = True
+    except Exception:
+        db_ok = False
+
+    # Redis check
+    try:
+        if redis_client:
+            await redis_client.ping()
+            redis_ok = True
+    except Exception:
+        redis_ok = False
+
+    if db_ok or redis_ok:
+        status_str = "ok"
+        code = 200
+    else:
+        status_str = "down"
+        code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    return JSONResponse(status_code=code, content={"status": status_str, "db": db_ok, "redis": redis_ok})
 
 # --- V1 API 라우터 포함 (일반 사용자 접근 가능) ---
 app.include_router(api_router, prefix="/api/v1")
