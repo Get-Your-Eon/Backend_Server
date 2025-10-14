@@ -3,7 +3,7 @@ import time
 from datetime import datetime
 import os
 
-from fastapi import FastAPI, Depends, HTTPException, status, APIRouter
+from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -74,6 +74,12 @@ def read_root():
         "project": settings.PROJECT_NAME,
         "api_version": settings.API_VERSION
     }
+
+
+@app.head("/", include_in_schema=False)
+def head_root():
+    """Explicit HEAD handler to make uptime probes (HEAD) return 200 without body."""
+    return Response(status_code=200)
 
 # --- V1 API 라우터 포함 (일반 사용자 접근 가능) ---
 app.include_router(api_router, prefix="/api/v1")
