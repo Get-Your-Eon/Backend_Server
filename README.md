@@ -147,5 +147,81 @@ Render의 무료(혹은 일부 설정된) 인스턴스는 일정 시간 동안 �
 - 너무 짧은 주기로 빈번히 ping을 보내면 비용 혹은 rate-limit 이슈가 발생할 수 있으니 5분 정도의 간격을 권장합니다.
 - 보안상 `/health`를 공개할 경우 민감 정보를 노출하지 않도록 주의하세요(간단한 OK/status만 반환).
 
+## 프론트엔드 연동: API 키 및 CORS 설정
+
+이 프로젝트는 프론트엔드(React 앱)와의 연동을 위해 간단한 API 키 기반 인증과 CORS 제한을 지원합니다. 아래는 프론트엔드 팀에게 전달할 내용과 예시입니다.
+
+1) 백엔드에서 설정해야 할 환경변수
+
+- `FRONTEND_API_KEYS` — 프론트엔드에서 사용할 API 키들을 쉼표로 구분하여 설정합니다.
+	- 예: `FRONTEND_API_KEYS=frontend-key-abc123,frontend-key-xyz987`
+	- Render 대시보드: Service > Environment > Add Environment Variable
+
+- `ALLOWED_ORIGINS` — CORS 허용 origin 목록(쉼표 구분)
+	- 예: `ALLOWED_ORIGINS=https://app.example.com,https://staging.example.com`
+	- 설정하면 서버는 해당 origin에서 오는 브라우저 요청만 허용합니다.
+
+2) API 키 생성 권장 방법
+
+- 간단 생성(예시): `openssl rand -hex 32` 또는 `python -c "import secrets; print(secrets.token_urlsafe(32))"`
+- 키는 비밀로 취급하세요. (레포지토리에 커밋금지)
+
+3) 프론트엔드 팀에 전달할 키(예시)
+
+- 전달 예시: `frontend-key-abc123` (실제 배포 전에 위에서 생성한 무작위 키로 대체하세요)
+
+4) 프론트엔드에서 API를 호출하는 방법 (예시)
+
+- Fetch API 예시:
+
+```js
+const API_KEY = 'frontend-key-abc123';
+fetch(`https://backend-server-4na0.onrender.com/subsidy?manufacturer=${encodeURIComponent(manufacturer)}&model_group=${encodeURIComponent(modelGroup)}`, {
+	method: 'GET',
+	headers: {
+		'X-API-KEY': API_KEY,
+		'Accept': 'application/json'
+	}
+})
+.then(res => res.json())
+.then(data => console.log(data))
+.catch(err => console.error(err));
+```
+
+- Axios 예시:
+
+```js
+import axios from 'axios';
+
+const API_KEY = process.env.REACT_APP_API_KEY; // or embed securely
+axios.get('https://backend-server-4na0.onrender.com/subsidy', {
+	params: { manufacturer: '현대자동차', model_group: 'GV60' },
+	headers: { 'X-API-KEY': API_KEY }
+}).then(res => console.log(res.data));
+```
+
+5) curl 테스트 예시
+
+```
+curl -H "X-API-KEY: frontend-key-abc123" "https://backend-server-4na0.onrender.com/subsidy?manufacturer=현대자동차&model_group=GV60"
+```
+
+6) 보안 주의 및 권장사항
+
+- 브라우저 환경에서 API 키를 클라이언트 코드에 직접 포함하는 것은 노출 위험이 있습니다. 최선의 방법은 백엔드에서 토큰 발급(세션/short-lived token) 또는 프론트엔드가 소유한 인증서버를 두는 것입니다. 다만, 팀 내부 프로젝트로서 제한된 도메인(ALLOWED_ORIGINS)과 제한된 키를 사용하는 경우 운영 상 허용하는 정책으로 사용할 수 있습니다.
+- DB 사용자 권한을 읽기 전용(SELECT)으로 설정하세요. 서버 단에서도 `ensure_read_only_sql` 방어 로직을 적용했습니다.
+- 주기적으로 키를 회전(rotate)하고, 더 이상 사용하지 않는 키는 `FRONTEND_API_KEYS`에서 제거하세요.
+
+7) 어떤 엔드포인트가 API 키를 요구하나
+
+- 현재 API 키가 필요한 엔드포인트: `/subsidy`, `/db-test` (읽기 전용 API)
+- 공개 엔드포인트: `/health` (모니터링용), `/` (루트 헬스)
+
+8) 환경변수 변경 시 배포
+
+- Render에서 환경변수 업데이트한 후에는 Redeploy 또는 Manual Deploy가 필요합니다.
+
+프론트엔드 팀에 이 문구와 함께 생성한 `frontend-key-...` 값을 공유해 주세요.
+
 
 문제가 있거나 시작 스크립스를 수정하길 원하시면 어떤 Start Command를 사용 중인지(또는 Render 서비스 URL/설정) 알려주시면 맞춤형으로 조정해 드리겠습니다.
