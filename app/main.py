@@ -94,7 +94,7 @@ if allowed_origins:
         CORSMiddleware,
         allow_origins=allowed_origins,
         allow_credentials=True,
-        allow_methods=["GET", "HEAD", "OPTIONS"],
+        allow_methods=["*"],
         allow_headers=["*"],
     )
 
