@@ -40,7 +40,12 @@ async def get_station(station_id: str = Path(...), _ok: bool = Depends(frontend_
         if result is None:
             logger.info("station_service.get_station_detail returned None for %s", station_id)
             raise HTTPException(status_code=404, detail="Station not found")
-        return result
+        # Temporary: return raw JSONResponse to avoid FastAPI response_model validation errors
+        try:
+            return JSONResponse(content=result.dict())
+        except Exception:
+            logger.exception("Failed to JSON serialize StationDetail for %s", station_id)
+            raise HTTPException(status_code=502, detail="Failed to serialize station detail")
     except ExternalAPIError as e:
         # External API explicitly did not find the station or returned a known error
         raise HTTPException(status_code=404, detail=str(e))
