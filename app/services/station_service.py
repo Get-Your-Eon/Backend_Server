@@ -322,16 +322,50 @@ class StationService:
             ch_resp = await self._post('/ws/charger/curCharger', json={"cpKeyList": [cp_key]})
             logger.info("curCharger response for %s: %s", cp_key, str(ch_resp)[:2000])
             if isinstance(ch_resp, list):
-                for c in ch_resp:
-                    chargers.append(ChargerDetail(
-                        id=str(c.get('chargerId') or c.get('id') or c.get('csId') or c.get('csId') ),
-                        station_id=station_id,
-                        connector_types=[c.get('connectorType') or c.get('connector') or ''],
-                        max_power_kw=c.get('outputKw') or c.get('output') or None,
-                        status=c.get('csStatCode') or c.get('status'),
-                        manufacturer=c.get('maker') or c.get('manufacturer'),
-                        model=c.get('model') or c.get('modelNm')
-                    ))
+                    # 상태 코드 매핑 테이블 (외부 제공 숫자 코드 -> 사람 읽기 좋은 문자열)
+                    STATUS_CODE_MAP = {
+                        0: "UNKNOWN",
+                        1: "CHARGING",
+                        2: "AVAILABLE",
+                        3: "OUT_OF_ORDER",
+                        4: "MAINTENANCE",
+                        5: "RESERVED",
+                    }
+
+                    def map_status(code):
+                        # code가 None이면 None 반환, 숫자/문자열 모두 처리
+                        if code is None:
+                            return None
+                        try:
+                            ival = int(code)
+                            return STATUS_CODE_MAP.get(ival, f"UNKNOWN_{ival}")
+                        except Exception:
+                            # 이미 문자열인 경우 그대로 반환
+                            return str(code)
+
+                    for c in ch_resp:
+                        charger_id = str(c.get('chargerId') or c.get('id') or c.get('csId') or c.get('csId') )
+                        numeric_status = c.get('csStatCode') if 'csStatCode' in c else c.get('status')
+                        chargers.append(ChargerDetail(
+                            id=charger_id,
+                            station_id=station_id,
+                            connector_types=[c.get('connectorType') or c.get('connector') or ''],
+                            max_power_kw=c.get('outputKw') or c.get('output') or None,
+                            status=map_status(numeric_status),
+                            manufacturer=c.get('maker') or c.get('manufacturer'),
+                            model=c.get('model') or c.get('modelNm'),
+                            bid=c.get('bid'),
+                            cpId=c.get('cpId'),
+                            charger_code=c.get('csId'),
+                            cs_cat_code=c.get('csCatCode'),
+                            info_coll_date=c.get('infoCollDate'),
+                            status_code=c.get('csStatCode'),
+                            ch_start_date=c.get('chStartDate'),
+                            last_ch_start_date=c.get('lastChStartDate'),
+                            last_ch_end_date=c.get('lastChEndDate'),
+                            updated_at=c.get('updateDate'),
+                            raw=c
+                        ))
         except Exception:
             # 충전기 상세 실패는 무시하고 기본 정보만 반환
             pass
