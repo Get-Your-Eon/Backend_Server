@@ -385,6 +385,63 @@ class StationService:
                 mismatch_detected = True
             else:
                 logger.warning("Requested cp_key=%s but external returned bid=%s cpId=%s; no matching charger record found; treating as not found", cp_key, returned_bid, returned_cpId)
+                # Try a last-resort fallback: if charger endpoint contains entries that match the requested cpId
+                try:
+                    cp_found = None
+                    if isinstance(ch_resp, list):
+                        for ch in ch_resp:
+                            # compare using parsed cpId from incoming station_id
+                            if '_' in station_id:
+                                _, requested_cpId = station_id.split('_', 1)
+                            else:
+                                requested_cpId = station_id
+                            if (ch.get('cpId') or ch.get('cpid') or '') == requested_cpId:
+                                cp_found = ch
+                                break
+                    if cp_found:
+                        # build chargers list from ch_resp entries that match requested_cpId
+                        chargers = []
+                        for c in ch_resp:
+                            if (c.get('cpId') or c.get('cpid') or '') == requested_cpId:
+                                charger_id = str(c.get('chargerId') or c.get('id') or c.get('csId') or c.get('csId'))
+                                numeric_status = c.get('csStatCode') if 'csStatCode' in c else c.get('status')
+                                chargers.append(ChargerDetail(
+                                    id=charger_id,
+                                    station_id=station_id,
+                                    connector_types=[c.get('connectorType') or c.get('connector') or ''],
+                                    max_power_kw=c.get('outputKw') or c.get('output') or None,
+                                    status=str(numeric_status) if numeric_status is not None else None,
+                                    manufacturer=c.get('maker') or c.get('manufacturer'),
+                                    model=c.get('model') or c.get('modelNm'),
+                                    bid=c.get('bid'),
+                                    cpId=c.get('cpId') or c.get('cpid'),
+                                    charger_code=c.get('csId'),
+                                    cs_cat_code=c.get('csCatCode'),
+                                    info_coll_date=c.get('infoCollDate'),
+                                    status_code=c.get('csStatCode'),
+                                    ch_start_date=c.get('chStartDate'),
+                                    last_ch_start_date=c.get('lastChStartDate'),
+                                    last_ch_end_date=c.get('lastChEndDate'),
+                                    updated_at=c.get('updateDate'),
+                                    raw=c
+                                ))
+                        # avoid referencing undefined extra_info here; use empty dict
+                        fallback_detail = StationDetail(
+                            id=station_id,
+                            name=item.get('cpName') or f"Station {station_id}",
+                            address=item.get('addr') or None,
+                            lat=0.0,
+                            lon=0.0,
+                            extra_info={'fallback_from_chargers': True},
+                            chargers=chargers
+                        )
+                        try:
+                            await set_cache(cache_key, fallback_detail.dict())
+                        except Exception:
+                            logger.debug("Failed to set cache for fallback %s", cache_key)
+                        return fallback_detail
+                except Exception:
+                    pass
                 raise ExternalAPIError('Station not found from external API')
 
         # charger 상세 조회
