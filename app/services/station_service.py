@@ -338,9 +338,32 @@ class StationService:
         # requested bid/cpId derived from cp_key: cp_key = 'P{bid}{cpId}'
         req = cp_key[1:]
         if req and not req.endswith(returned_cpId):
-            # mismatch: log and raise so router returns 404
-            logger.warning("Requested cp_key=%s but external returned bid=%s cpId=%s; treating as not found", cp_key, returned_bid, returned_cpId)
-            raise ExternalAPIError('Station not found from external API')
+            # mismatch: sometimes the station endpoint returns a generic/fallback record
+            # while charger endpoint contains the actual cpId we asked for. Attempt to
+            # find station info from charger_payload if possible.
+            try:
+                ch_resp = await self._post('/ws/charger/curCharger', json={"cpKeyList": [cp_key]})
+            except Exception:
+                ch_resp = None
+
+            found_station_info = None
+            if isinstance(ch_resp, list):
+                for ch in ch_resp:
+                    if (ch.get('bid', '') + (ch.get('cpId') or ch.get('cpid') or '')) == req:
+                        # found matching charger record that corresponds to our requested cp_key
+                        found_station_info = {
+                            'bid': ch.get('bid'),
+                            'cpId': ch.get('cpId') or ch.get('cpid')
+                        }
+                        break
+
+            if found_station_info:
+                # override item minimal fields when station payload seems generic
+                item['bid'] = found_station_info['bid']
+                item['cpId'] = found_station_info['cpId']
+            else:
+                logger.warning("Requested cp_key=%s but external returned bid=%s cpId=%s; no matching charger record found; treating as not found", cp_key, returned_bid, returned_cpId)
+                raise ExternalAPIError('Station not found from external API')
 
         # charger 상세 조회
         chargers: List[ChargerDetail] = []
