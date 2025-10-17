@@ -23,6 +23,7 @@ from app.redis_client import (
     get_cache
 )
 from app.api.v1.api import api_router
+from app.api.deps import frontend_api_key_required
 
 # --- 환경 변수로 관리자 모드 판단 ---
 IS_ADMIN = os.getenv("ADMIN_MODE", "false").lower() == "true"
@@ -48,19 +49,7 @@ def admin_required(credentials: HTTPBasicCredentials = Depends(security)):
     return True
 
 
-# --- API Key auth for frontend clients ---
-def get_frontend_api_keys():
-    raw = os.getenv("FRONTEND_API_KEYS", "")
-    return [k.strip() for k in raw.split(",") if k.strip()]
-
-def frontend_api_key_required(x_api_key: str = Header(...)):
-    keys = get_frontend_api_keys()
-    if not keys:
-        # no keys configured -> deny
-        raise HTTPException(status_code=403, detail="API keys not configured")
-    if x_api_key not in keys:
-        raise HTTPException(status_code=403, detail="Invalid API key")
-    return True
+# frontend API key dependency moved to `app.api.deps` to avoid circular imports
 
 
 def ensure_read_only_sql(sql: str):

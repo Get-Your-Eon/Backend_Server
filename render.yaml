@@ -1,0 +1,50 @@
+# render.yaml - Render service definition template
+# NOTE: Do NOT put real secrets here. Add real values in Render Dashboard.
+
+services:
+  - type: web
+    name: codyssey-api
+    env: docker
+    plan: starter
+    region: oregon
+    # If you use Dockerfile in repo, buildCommand can be empty.
+    buildCommand: ""
+    # startCommand: use gunicorn for production
+    startCommand: "gunicorn -k uvicorn.workers.UvicornWorker app.main:app"
+    envVars:
+      - key: DATABASE_URL
+        value: ""
+      - key: REDIS_HOST
+        value: ""
+      - key: REDIS_PORT
+        value: ""
+      - key: REDIS_PASSWORD
+        value: ""
+      - key: FRONTEND_API_KEYS
+        value: ""
+      - key: EXTERNAL_STATION_API_BASE_URL
+        value: ""
+      - key: EXTERNAL_STATION_API_KEY
+        # mark as secure in Render UI, value left empty here
+        value: ""
+      - key: EXTERNAL_STATION_API_AUTH_TYPE
+        value: "header"
+      - key: EXTERNAL_STATION_API_KEY_HEADER_NAME
+        value: "Authorization"
+      - key: EXTERNAL_STATION_API_TIMEOUT_SECONDS
+        value: "15"
+      - key: SECRET_KEY
+        value: ""
+      - key: ENVIRONMENT
+        value: "production"
+      - key: DOCKER_ENV
+        value: "true"
+      - key: ALLOWED_ORIGINS
+        value: ""
+      - key: ADMIN_CREDENTIALS
+        value: ""
+      - key: ADMIN_MODE
+        value: "false"
+
+# Optional: health checks, static deploys, etc. can be added per Render docs
+# For detailed render.yaml reference see: https://render.com/docs/render-yaml
