@@ -3,8 +3,12 @@ import asyncio
 import math
 import httpx
 from app.core.config import settings
-from app.redis_client import get_cache, set_cache
+from app.redis_client import get_cache, set_cache, get_redis_client
 from app.schemas.station import StationSummary, StationDetail, ChargerDetail
+from app.repository.station import get_nearby_stations_db, upsert_stations_and_chargers
+from app.db.database import AsyncSessionLocal
+from sqlalchemy.ext.asyncio import AsyncSession
+import asyncio
 
 
 class ExternalAPIError(Exception):
@@ -107,6 +111,17 @@ class StationService:
         if cached:
             return [StationSummary(**s) for s in cached]
 
+        # 1) DB 조회 (PostGIS 사용 가능 시 더 효율적인 쿼리로 대체)
+        async with AsyncSessionLocal() as session:
+            try:
+                db_results = await get_nearby_stations_db(session, lat_f, lon_f, radius_m, limit=limit, offset=(page-1)*limit)
+                if db_results:
+                    await set_cache(cache_key, db_results)
+                    return [StationSummary(**s) for s in db_results]
+            except Exception:
+                # DB 에러가 나면 무시하고 외부 API 호출로 fallback
+                pass
+
         # 외부 사이트(실제 chargeinfo 페이지)의 JS를 분석한 결과, 검색은
         # POST /ws/chargePoint/curChargePoint (또는 searchChargePoint)로
         # cond JSON 객체를 전송하는 방식입니다. 여기서는 단순히 지도 중심
@@ -143,6 +158,25 @@ class StationService:
         }
 
         # POST 형식으로 충전소 목록을 요청
+        # To prevent thundering herd, acquire a simple redis lock per cache_key
+        lock_key = f"lock:{cache_key}"
+        redis_client = await get_redis_client()
+        have_lock = False
+        if redis_client:
+            try:
+                # setnx with short TTL
+                have_lock = await redis_client.set(lock_key, "1", nx=True, ex=10)
+            except Exception:
+                have_lock = False
+
+        payload = None
+        if not have_lock:
+            # someone else is likely populating cache; wait briefly then check cache again
+            await asyncio.sleep(0.5)
+            cached2 = await get_cache(cache_key)
+            if cached2:
+                return [StationSummary(**s) for s in cached2]
+
         payload = await self._post('/ws/chargePoint/curChargePoint', json=cond)
 
         items = []
@@ -209,7 +243,19 @@ class StationService:
             # 충전기 조회 실패는 전체 검색 실패로 연결하지 않음
             pass
 
+        # persist results to DB (best-effort)
+        try:
+            async with AsyncSessionLocal() as session:
+                await upsert_stations_and_chargers(session, [s.dict() for s in summaries])
+        except Exception:
+            pass
+
         await set_cache(cache_key, [s.dict() for s in summaries])
+        if redis_client and have_lock:
+            try:
+                await redis_client.delete(lock_key)
+            except Exception:
+                pass
         return summaries
 
     async def get_station_detail(self, station_id: str) -> StationDetail:
