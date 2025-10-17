@@ -10,6 +10,18 @@ class ChargerBasic(BaseModel):
     status: Optional[str] = None
     manufacturer: Optional[str] = None
     model: Optional[str] = None
+    # additional fields observed in external API
+    bid: Optional[str] = None
+    cpId: Optional[str] = None
+    charger_code: Optional[str] = None  # csId
+    cs_cat_code: Optional[str] = None
+    info_coll_date: Optional[str] = None
+    status_code: Optional[int] = None
+    ch_start_date: Optional[str] = None
+    last_ch_start_date: Optional[str] = None
+    last_ch_end_date: Optional[str] = None
+    updated_at: Optional[str] = None
+    raw: Optional[dict] = None
 
 
 class StationSummary(BaseModel):
@@ -40,6 +52,18 @@ class ChargerDetail(BaseModel):
     status: Optional[str] = None
     manufacturer: Optional[str] = None
     model: Optional[str] = None
+    # additional raw fields
+    bid: Optional[str] = None
+    cpId: Optional[str] = None
+    charger_code: Optional[str] = None
+    cs_cat_code: Optional[str] = None
+    info_coll_date: Optional[str] = None
+    status_code: Optional[int] = None
+    ch_start_date: Optional[str] = None
+    last_ch_start_date: Optional[str] = None
+    last_ch_end_date: Optional[str] = None
+    updated_at: Optional[str] = None
+    raw: Optional[dict] = None
 # app/schemas/station.py
 from pydantic import BaseModel
 from typing import Optional, List
