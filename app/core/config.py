@@ -71,26 +71,22 @@ class Settings(BaseSettings):
         return v
 
     @model_validator(mode="after")
-    def switch_redis_host(cls, values):
+    def switch_redis_host(self):
         """
         Docker 환경에서는 내부 서비스 이름으로 Redis를 지정합니다.
         Production(Render) 및 Development에서는 환경변수를 그대로 사용합니다.
         """
-        env = values.ENVIRONMENT.lower()
+        env = (self.ENVIRONMENT or "").lower()
 
         if env == "docker":
             # Docker Compose 실행 시
-            values.REDIS_HOST = values.REDIS_HOST or "ev_charger_redis"
-            values.REDIS_PORT = values.REDIS_PORT or 6379
-            values.REDIS_PASSWORD = values.REDIS_PASSWORD or None
+            self.REDIS_HOST = self.REDIS_HOST or "ev_charger_redis"
+            self.REDIS_PORT = self.REDIS_PORT or 6379
+            self.REDIS_PASSWORD = self.REDIS_PASSWORD or None
 
-        elif env == "production":
-            # Render 환경 — 환경변수에 설정된 값을 그대로 사용
-            pass
+        # production/development: do not override environment-provided values
 
-        # development: do not override environment-provided values
-
-        return values
+        return self
 
 
 # --------------------------
