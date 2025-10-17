@@ -451,18 +451,29 @@ class StationService:
         except Exception:
             lon_val = 0.0
 
-            detail = StationDetail(
-                id=station_id,
-                name=item.get('cpName') or item.get('cp_name') or '',
-                address=item.get('addr') or item.get('roadName') or item.get('address'),
-                lat=lat_val,
-                lon=lon_val,
-                extra_info={k: v for k, v in item.items() if k not in ("csList", "id", "cpId", "cpName", "addr", "lat", "lon", "x", "y")},
-                chargers=chargers
-            )
+        # If coords are missing (0.0/0.0) and we have chargers, attempt to mark fallback
+        coords_missing = (lat_val == 0.0 and lon_val == 0.0)
+        extra_info = {k: v for k, v in item.items() if k not in ("csList", "id", "cpId", "cpName", "addr", "lat", "lon", "x", "y")}
+        if coords_missing:
+            extra_info.setdefault('notes', {})['coords_fallback'] = True
 
+        # Build StationDetail using available station item and populated chargers.
+        detail = StationDetail(
+            id=station_id,
+            name=item.get('cpName') or item.get('cp_name') or '',
+            address=item.get('addr') or item.get('roadName') or item.get('address'),
+            lat=lat_val,
+            lon=lon_val,
+            extra_info=extra_info,
+            chargers=chargers
+        )
+
+        # cache and return
+        try:
             await set_cache(cache_key, detail.dict())
-            return detail
+        except Exception:
+            logger.debug("Failed to set cache for %s", cache_key)
+        return detail
 
     async def get_raw_charger_payload(self, station_id: str) -> Dict[str, Any]:
         """Return raw station payload and charger payload from external API for debugging.
