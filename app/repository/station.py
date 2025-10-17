@@ -1,77 +1,45 @@
 from typing import List, Dict, Any, Optional
-import math
-from sqlalchemy import select, delete
+from sqlalchemy import text, delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Station, Charger
 
 
-def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> int:
-    R = 6371000
-    phi1, phi2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlambda = math.radians(lon2 - lon1)
-    a = math.sin(dphi/2)**2 + math.cos(phi1)*math.cos(phi2)*math.sin(dlambda/2)**2
-    return int(round(2 * R * math.asin(math.sqrt(a))))
-
-
 async def get_nearby_stations_db(session: AsyncSession, lat: float, lon: float, radius_m: int, limit: int = 20, offset: int = 0) -> List[Dict[str, Any]]:
     """
-    Simple bounding-box DB query using Station.latitude/longitude properties provided by models' Geometry column.
-    Falls back to returning candidates and computing precise distances in-app.
+    Uses PostGIS ST_DWithin and ST_Distance to return nearby stations with distance_m.
+    Requires PostGIS extension and stations.location geometry column (SRID=4326).
     """
-    # Compute rough delta (degrees)
-    delta_lat = radius_m / 111000.0
-    try:
-        delta_lon = radius_m / (111000.0 * max(0.000001, math.cos(math.radians(lat))))
-    except Exception:
-        delta_lon = radius_m / 111000.0
+    sql = text(
+        """
+        SELECT
+          COALESCE(station_code, id::text) AS id,
+          name,
+          address,
+          ST_Y(location::geometry) AS lat,
+          ST_X(location::geometry) AS lon,
+          ST_Distance(location::geography, ST_SetSRID(ST_MakePoint(:lon, :lat),4326)::geography) AS distance_m,
+          (SELECT COUNT(1) FROM chargers c WHERE c.station_id = stations.id) AS charger_count
+        FROM stations
+        WHERE location IS NOT NULL
+          AND ST_DWithin(location::geography, ST_SetSRID(ST_MakePoint(:lon, :lat),4326)::geography, :radius)
+        ORDER BY distance_m
+        LIMIT :limit OFFSET :offset
+        """
+    )
 
-    minLat = lat - delta_lat
-    maxLat = lat + delta_lat
-    minLon = lon - delta_lon
-    maxLon = lon + delta_lon
-
-    # Query candidate stations using mapped properties (latitude/longitude via geometry)
-    q = select(Station).where(
-        Station.location.isnot(None)
-    ).limit(1000)
-
-    result = await session.execute(q)
-    rows = result.scalars().all()
-
-    candidates = []
-    for s in rows:
-        lat_s = s.latitude
-        lon_s = s.longitude
-        if lat_s is None or lon_s is None:
-            continue
-        if not (minLat <= lat_s <= maxLat and minLon <= lon_s <= maxLon):
-            continue
-        dist = haversine_m(lat, lon, lat_s, lon_s)
-        candidates.append({
-            "station": s,
-            "lat": lat_s,
-            "lon": lon_s,
-            "distance_m": dist
-        })
-
-    # sort and paginate
-    candidates.sort(key=lambda x: x["distance_m"])
-    paged = candidates[offset: offset + limit]
-
+    result = await session.execute(sql, {"lat": lat, "lon": lon, "radius": radius_m, "limit": limit, "offset": offset})
+    rows = result.mappings().all()
     out = []
-    for c in paged:
-        s = c["station"]
+    for r in rows:
         out.append({
-            "id": s.station_code or str(s.id),
-            "name": s.name,
-            "address": s.address,
-            "lat": c["lat"],
-            "lon": c["lon"],
-            "distance_m": c["distance_m"],
-            "charger_count": len(s.chargers) if s.chargers is not None else None
+            "id": r["id"],
+            "name": r["name"],
+            "address": r["address"],
+            "lat": float(r["lat"]) if r["lat"] is not None else None,
+            "lon": float(r["lon"]) if r["lon"] is not None else None,
+            "distance_m": int(round(float(r["distance_m"]))) if r["distance_m"] is not None else None,
+            "charger_count": int(r["charger_count"]) if r["charger_count"] is not None else None,
         })
-
     return out
 
 
