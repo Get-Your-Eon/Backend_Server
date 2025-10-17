@@ -2,6 +2,7 @@ from typing import List, Optional, Dict, Any
 import asyncio
 import math
 import httpx
+import logging
 from app.core.config import settings
 from app.redis_client import get_cache, set_cache, get_redis_client
 from app.schemas.station import StationSummary, StationDetail, ChargerDetail
@@ -9,6 +10,10 @@ from app.repository.station import get_nearby_stations_db, upsert_stations_and_c
 from app.db.database import AsyncSessionLocal
 from sqlalchemy.ext.asyncio import AsyncSession
 import asyncio
+
+
+# logger for this module
+logger = logging.getLogger("app.services.station_service")
 
 
 class ExternalAPIError(Exception):
@@ -86,6 +91,14 @@ class StationService:
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
                     resp = await client.post(url, headers=headers, params=base_params, json=json)
+                    # Log status and truncated body for debugging (do not log headers or secrets)
+                    try:
+                        body_text = resp.text
+                    except Exception:
+                        body_text = "<unreadable>"
+                    truncated = body_text[:2000] + ("...[truncated]" if len(body_text) > 2000 else "")
+                    logger.info("External POST %s status=%s body=%s", url, resp.status_code, truncated)
+
                     if resp.status_code == 200:
                         return resp.json()
                     if resp.status_code == 429:
@@ -178,6 +191,14 @@ class StationService:
                 return [StationSummary(**s) for s in cached2]
 
         payload = await self._post('/ws/chargePoint/curChargePoint', json=cond)
+
+        # Log returned station payload (truncated) for debugging charger specs
+        try:
+            import json as _json
+            raw_payload_text = _json.dumps(payload) if isinstance(payload, (dict, list)) else str(payload)
+        except Exception:
+            raw_payload_text = str(payload)
+        logger.info("curChargePoint payload for %s: %s", cp_key, raw_payload_text[:2000])
 
         items = []
         if isinstance(payload, list):
@@ -295,6 +316,7 @@ class StationService:
         chargers: List[ChargerDetail] = []
         try:
             ch_resp = await self._post('/ws/charger/curCharger', json={"cpKeyList": [cp_key]})
+            logger.info("curCharger response for %s: %s", cp_key, str(ch_resp)[:2000])
             if isinstance(ch_resp, list):
                 for c in ch_resp:
                     chargers.append(ChargerDetail(
@@ -322,6 +344,25 @@ class StationService:
 
         await set_cache(cache_key, detail.dict())
         return detail
+
+    async def get_raw_charger_payload(self, station_id: str) -> Dict[str, Any]:
+        """Return raw station payload and charger payload from external API for debugging.
+
+        Returns a dict: { "cp_key": str, "station_payload": <raw>, "charger_payload": <raw> }
+        """
+        # derive cp_key same as in get_station_detail
+        if '_' in station_id:
+            bid, cpId = station_id.split('_', 1)
+        else:
+            bid = ''
+            cpId = station_id
+        cp_key = f"P{bid}{cpId}"
+
+        cond = {"cpKeyList": [cp_key], "searchStatus": False}
+        station_payload = await self._post('/ws/chargePoint/curChargePoint', json=cond)
+        charger_payload = await self._post('/ws/charger/curCharger', json={"cpKeyList": [cp_key]})
+
+        return {"cp_key": cp_key, "station_payload": station_payload, "charger_payload": charger_payload}
 
 
 station_service = StationService()
