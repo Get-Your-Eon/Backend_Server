@@ -330,6 +330,18 @@ class StationService:
         if not item:
             raise ExternalAPIError('Station not found from external API')
 
+        # Ensure the returned station payload actually matches the requested cp_key
+        # Some external endpoints may return a fallback/default record when cp_key is not found.
+        # If the returned bid/cpId do not match the requested cp_key, treat as not found.
+        returned_bid = item.get('bid') or ''
+        returned_cpId = item.get('cpId') or item.get('cpid') or ''
+        # requested bid/cpId derived from cp_key: cp_key = 'P{bid}{cpId}'
+        req = cp_key[1:]
+        if req and not req.endswith(returned_cpId):
+            # mismatch: log and raise so router returns 404
+            logger.warning("Requested cp_key=%s but external returned bid=%s cpId=%s; treating as not found", cp_key, returned_bid, returned_cpId)
+            raise ExternalAPIError('Station not found from external API')
+
         # charger 상세 조회
         chargers: List[ChargerDetail] = []
         try:
