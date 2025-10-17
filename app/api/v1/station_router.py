@@ -35,7 +35,11 @@ async def search_stations(lat: Union[str, float] = Query(...), lon: Union[str, f
 async def get_station(station_id: str = Path(...), _ok: bool = Depends(frontend_api_key_required)):
     logger = logging.getLogger("app.api.v1.station_router")
     try:
-        return await station_service.get_station_detail(station_id)
+        result = await station_service.get_station_detail(station_id)
+        if result is None:
+            logger.info("station_service.get_station_detail returned None for %s", station_id)
+            raise HTTPException(status_code=404, detail="Station not found")
+        return result
     except ExternalAPIError as e:
         # External API explicitly did not find the station or returned a known error
         raise HTTPException(status_code=404, detail=str(e))
