@@ -164,13 +164,29 @@ class StationService:
             name = it.get('cpName') or it.get('cp_name') or it.get('station_name') or ''
             address = it.get('addr') or it.get('roadName') or it.get('address')
 
+            # 거리 정보는 외부에서 '0.71' 같은 소수(km) 또는 정수(미터)로 올 수 있으므로
+            # 안전하게 정수(미터)로 변환합니다. 소수값이 10보다 작으면 km로 간주하고 *1000 변환.
+            raw_dis = it.get('dis') or it.get('distance') or it.get('distance_m')
+            distance_m = None
+            if raw_dis is not None:
+                try:
+                    d = float(raw_dis)
+                    if d < 10:
+                        # 보통 0.71 처럼 올 경우 km 단위로 보정
+                        distance_m = int(round(d * 1000))
+                    else:
+                        # 이미 미터 단위로 온 경우
+                        distance_m = int(round(d))
+                except Exception:
+                    distance_m = None
+
             summaries.append(StationSummary(
                 id=f"{bid}_{cpId}",
                 name=name,
                 address=address,
                 lat=float(lat_val) if lat_val is not None else 0.0,
                 lon=float(lon_val) if lon_val is not None else 0.0,
-                distance_m=it.get('dis'),
+                distance_m=distance_m,
                 charger_count=None
             ))
 
