@@ -140,6 +140,14 @@ class StationService:
         # cond JSON 객체를 전송하는 방식입니다. 여기서는 단순히 지도 중심
         # + radius를 이용해 bounding box를 계산하여 cond를 구성합니다.
 
+        # If external API is not configured, avoid calling it and return empty list.
+        # This prevents a hard 502 when deployment lacks external API settings.
+        if not self.base_url:
+            logger.warning("External station API base URL is not configured; returning fallback results (empty or DB results)")
+            # at this point DB lookup was already attempted above; return empty list
+            await set_cache(cache_key, [])
+            return []
+
         # 위도/경도 -> 각도 차 계산 (대략 1 deg latitude ~= 111km)
         delta_lat = radius_m / 111000.0
         # 경도는 위도에 따라 달라짐
