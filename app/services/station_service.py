@@ -198,7 +198,11 @@ class StationService:
             raw_payload_text = _json.dumps(payload) if isinstance(payload, (dict, list)) else str(payload)
         except Exception:
             raw_payload_text = str(payload)
-        logger.info("curChargePoint payload for %s: %s", cp_key, raw_payload_text[:2000])
+        try:
+            logger.info("curChargePoint payload for cache=%s (lat=%s lon=%s): %s", cache_key, lat_f, lon_f, raw_payload_text[:2000])
+        except Exception:
+            # Defensive: if any local variable is not available or logging fails, don't crash the request
+            logger.debug("Skipping curChargePoint debug log due to missing context or logging error.")
 
         items = []
         if isinstance(payload, list):
