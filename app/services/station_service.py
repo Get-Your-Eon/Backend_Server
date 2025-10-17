@@ -358,9 +358,29 @@ class StationService:
                         break
 
             if found_station_info:
-                # override item minimal fields when station payload seems generic
-                item['bid'] = found_station_info['bid']
-                item['cpId'] = found_station_info['cpId']
+                # re-query station endpoint with the found charger-derived cpId to get accurate station info
+                new_cp_key = f"P{found_station_info['bid']}{found_station_info['cpId']}"
+                try:
+                    new_payload = await self._post('/ws/chargePoint/curChargePoint', json={"cpKeyList": [new_cp_key], "searchStatus": False})
+                    new_item = None
+                    if isinstance(new_payload, list) and len(new_payload) > 0:
+                        new_item = new_payload[0]
+                    elif isinstance(new_payload, dict):
+                        arr = new_payload.get('result') or new_payload.get('data') or []
+                        if arr:
+                            new_item = arr[0]
+                    if new_item:
+                        item = new_item
+                        cp_key = new_cp_key
+                        cache_key = f"station:detail:{cp_key}"
+                    else:
+                        # fallback to minimal override if re-query failed
+                        item['bid'] = found_station_info['bid']
+                        item['cpId'] = found_station_info['cpId']
+                except Exception:
+                    # re-query failed; still fallback to minimal override
+                    item['bid'] = found_station_info['bid']
+                    item['cpId'] = found_station_info['cpId']
             else:
                 logger.warning("Requested cp_key=%s but external returned bid=%s cpId=%s; no matching charger record found; treating as not found", cp_key, returned_bid, returned_cpId)
                 raise ExternalAPIError('Station not found from external API')
