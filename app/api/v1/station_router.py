@@ -38,6 +38,31 @@ async def get_station(station_id: str = Path(...), _ok: bool = Depends(frontend_
         raise HTTPException(status_code=502, detail=str(e))
 
 
+@router.get("/stations/{station_id}/chargers", response_model=List[ChargerDetail], tags=["Charger"])
+async def station_chargers(station_id: str = Path(...), _ok: bool = Depends(frontend_api_key_required)):
+    """Return list of chargers for a station."""
+    try:
+        detail = await station_service.get_station_detail(station_id)
+        return detail.chargers or []
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/stations/{station_id}/chargers/{charger_id}", response_model=ChargerDetail, tags=["Charger"])
+async def station_charger_detail(station_id: str = Path(...), charger_id: str = Path(...), _ok: bool = Depends(frontend_api_key_required)):
+    """Return a single charger spec for given station and charger id."""
+    try:
+        detail = await station_service.get_station_detail(station_id)
+        for c in (detail.chargers or []):
+            if c.id == charger_id or (hasattr(c, 'charger_code') and getattr(c, 'charger_code') == charger_id):
+                return c
+        raise HTTPException(status_code=404, detail="Charger not found for station")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 @router.get("/chargers/{charger_id}", response_model=ChargerDetail, tags=["Charger"])
 async def get_charger(charger_id: str = Path(...), _ok: bool = Depends(frontend_api_key_required)):
     # Currently delegate to station detail lookup — could be improved to call dedicated endpoint
