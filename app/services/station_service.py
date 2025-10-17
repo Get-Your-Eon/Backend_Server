@@ -337,6 +337,7 @@ class StationService:
         returned_cpId = item.get('cpId') or item.get('cpid') or ''
         # requested bid/cpId derived from cp_key: cp_key = 'P{bid}{cpId}'
         req = cp_key[1:]
+        mismatch_detected = False
         if req and not req.endswith(returned_cpId):
             # mismatch: sometimes the station endpoint returns a generic/fallback record
             # while charger endpoint contains the actual cpId we asked for. Attempt to
@@ -381,6 +382,7 @@ class StationService:
                     # re-query failed; still fallback to minimal override
                     item['bid'] = found_station_info['bid']
                     item['cpId'] = found_station_info['cpId']
+                mismatch_detected = True
             else:
                 logger.warning("Requested cp_key=%s but external returned bid=%s cpId=%s; no matching charger record found; treating as not found", cp_key, returned_bid, returned_cpId)
                 raise ExternalAPIError('Station not found from external API')
@@ -467,6 +469,25 @@ class StationService:
             extra_info=extra_info,
             chargers=chargers
         )
+
+        # If mismatch was detected or coords are missing, but we have charger records,
+        # prefer returning a charger-driven StationDetail so the client still gets charger specs.
+        if (mismatch_detected or coords_missing) and chargers:
+            # Build a minimal station detail from charger info (no reliable coords)
+            fallback_detail = StationDetail(
+                id=station_id,
+                name=detail.name or f"Station {station_id}",
+                address=detail.address,
+                lat=detail.lat,
+                lon=detail.lon,
+                extra_info={**(detail.extra_info or {}), 'fallback_from_chargers': True},
+                chargers=chargers
+            )
+            try:
+                await set_cache(cache_key, fallback_detail.dict())
+            except Exception:
+                logger.debug("Failed to set cache for fallback %s", cache_key)
+            return fallback_detail
 
         # cache and return
         try:
