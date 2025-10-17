@@ -284,20 +284,26 @@ class StationService:
         return summaries
 
     async def get_station_detail(self, station_id: str) -> StationDetail:
-        cache_key = f"station:detail:{station_id}"
+        # Normalize incoming station identifier into an external cp_key used by the provider
+        # Acceptable incoming forms:
+        # - cp_key already provided (starts with 'P')
+        # - canonical id returned from search: "{bid}_{cpId}"
+        # - fallback: raw id -> prepend 'P'
+        if isinstance(station_id, str) and station_id.startswith('P'):
+            cp_key = station_id
+        elif '_' in station_id:
+            bid, cpId = station_id.split('_', 1)
+            cp_key = f"P{bid}{cpId}"
+        else:
+            # unknown format: assume it's a cpId or short id and prepend 'P'
+            cp_key = f"P{station_id}"
+
+        # Use normalized cp_key as cache key to avoid collisions when different station_id
+        # representations are passed in by clients.
+        cache_key = f"station:detail:{cp_key}"
         cached = await get_cache(cache_key)
         if cached:
             return StationDetail(**cached)
-
-        # station_id expected format: "{bid}_{cpId}" as returned by search_stations
-        if '_' in station_id:
-            bid, cpId = station_id.split('_', 1)
-        else:
-            # fallback: try to call external endpoint directly with provided id
-            bid = ''
-            cpId = station_id
-
-        cp_key = f"P{bid}{cpId}"
 
         # 먼저 충전소 기본 정보를 가져옵니다. curChargePoint에 cpKeyList로 요청하면
         # 해당 충전소(들)의 정보가 반환됩니다.
@@ -370,18 +376,30 @@ class StationService:
             # 충전기 상세 실패는 무시하고 기본 정보만 반환
             pass
 
-        detail = StationDetail(
-            id=station_id,
-            name=item.get('cpName') or item.get('cp_name') or '',
-            address=item.get('addr') or item.get('roadName') or item.get('address'),
-            lat=float(item.get('lat') or item.get('latitude') or 0.0),
-            lon=float(item.get('lon') or item.get('longitude') or 0.0),
-            extra_info={k: v for k, v in item.items() if k not in ("csList", "id", "cpId", "cpName", "addr", "lat", "lon")},
-            chargers=chargers
-        )
+        # parse lat/lon robustly: some provider payloads use 'x'/'y' while others use 'lat'/'lon' or 'latitude'/'longitude'
+        raw_lat = item.get('y') or item.get('lat') or item.get('latitude') or item.get('latitudeValue')
+        raw_lon = item.get('x') or item.get('lon') or item.get('longitude') or item.get('longitudeValue')
+        try:
+            lat_val = float(raw_lat) if raw_lat is not None else 0.0
+        except Exception:
+            lat_val = 0.0
+        try:
+            lon_val = float(raw_lon) if raw_lon is not None else 0.0
+        except Exception:
+            lon_val = 0.0
 
-        await set_cache(cache_key, detail.dict())
-        return detail
+            detail = StationDetail(
+                id=station_id,
+                name=item.get('cpName') or item.get('cp_name') or '',
+                address=item.get('addr') or item.get('roadName') or item.get('address'),
+                lat=lat_val,
+                lon=lon_val,
+                extra_info={k: v for k, v in item.items() if k not in ("csList", "id", "cpId", "cpName", "addr", "lat", "lon", "x", "y")},
+                chargers=chargers
+            )
+
+            await set_cache(cache_key, detail.dict())
+            return detail
 
     async def get_raw_charger_payload(self, station_id: str) -> Dict[str, Any]:
         """Return raw station payload and charger payload from external API for debugging.
