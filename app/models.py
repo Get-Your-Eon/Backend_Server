@@ -4,7 +4,7 @@ from typing import List, Optional
 
 from geoalchemy2 import Geometry
 from geoalchemy2.shape import to_shape
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, UniqueConstraint, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship, declarative_base
 from sqlalchemy.sql import func
 
@@ -29,8 +29,14 @@ class Station(Base):
     station_code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200))
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # external identifiers from upstream provider (e.g., bid, cpId or cpKey)
+    external_bid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    external_cp_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # raw JSON from upstream provider for debugging / future fields
+    raw_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     provider: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     location = Column(Geometry(geometry_type='POINT', srid=4326), index=True)
+    last_synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
@@ -54,6 +60,11 @@ class Charger(Base):
     charger_code: Mapped[str] = mapped_column(String(50))
     charger_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     connector_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # additional external metadata
+    external_charger_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    manufacturer: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    connector_types: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     output_kw: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     status_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now())
