@@ -48,6 +48,19 @@ async def station_chargers(station_id: str = Path(...), _ok: bool = Depends(fron
         raise HTTPException(status_code=502, detail=str(e))
 
 
+@router.get("/stations/{station_id}/chargers/raw", tags=["Charger"], summary="(debug) raw station and charger payloads")
+async def station_chargers_raw(station_id: str = Path(...), _ok: bool = Depends(frontend_api_key_required)):
+    """Return the raw payloads returned by the external APIs for given station cpKey.
+
+    WARNING: Debug endpoint; do not expose in production without access control.
+    """
+    try:
+        raw = await station_service.get_raw_charger_payload(station_id)
+        return raw
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
 @router.get("/stations/{station_id}/chargers/{charger_id}", response_model=ChargerDetail, tags=["Charger"])
 async def station_charger_detail(station_id: str = Path(...), charger_id: str = Path(...), _ok: bool = Depends(frontend_api_key_required)):
     """Return a single charger spec for given station and charger id."""
