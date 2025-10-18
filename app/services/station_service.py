@@ -3,6 +3,7 @@ import asyncio
 import math
 import httpx
 import logging
+import re
 from app.core.config import settings
 from app.redis_client import get_cache, set_cache, get_redis_client
 from app.schemas.station import StationSummary, StationDetail, ChargerDetail
@@ -18,6 +19,67 @@ logger = logging.getLogger("app.services.station_service")
 
 class ExternalAPIError(Exception):
     pass
+
+
+# External status mapping (numeric code -> readable status)
+STATUS_CODE_MAP = {
+    0: "UNKNOWN",
+    1: "CHARGING",
+    2: "AVAILABLE",
+    3: "OUT_OF_ORDER",
+    4: "MAINTENANCE",
+    5: "RESERVED",
+}
+
+
+def _map_status(code: Any) -> Optional[str]:
+    if code is None:
+        return None
+    try:
+        ival = int(code)
+        return STATUS_CODE_MAP.get(ival, f"UNKNOWN_{ival}")
+    except Exception:
+        return str(code)
+
+
+def _normalize_connector_types(raw_val: Any) -> List[str]:
+    # Accept a list, comma/pipe/semicolon-separated string, or single value
+    if raw_val is None:
+        return []
+    if isinstance(raw_val, list):
+        out = [str(x).strip() for x in raw_val if str(x).strip()]
+        return out
+    s = str(raw_val)
+    if not s:
+        return []
+    # split on common delimiters
+    parts = [p.strip() for p in re.split(r"[,|;]", s) if p.strip()]
+    return parts
+
+
+def _extract_coords_from_raw(raw: Dict[str, Any]) -> Optional[tuple]:
+    # try common keys
+    lat_keys = ("y", "lat", "latitude", "latitudeValue")
+    lon_keys = ("x", "lon", "longitude", "longitudeValue")
+    lat = None
+    lon = None
+    for k in lat_keys:
+        if k in raw and raw.get(k) is not None:
+            try:
+                lat = float(raw.get(k))
+                break
+            except Exception:
+                continue
+    for k in lon_keys:
+        if k in raw and raw.get(k) is not None:
+            try:
+                lon = float(raw.get(k))
+                break
+            except Exception:
+                continue
+    if lat is None or lon is None:
+        return None
+    return (lat, lon)
 
 
 class StationService:
@@ -450,36 +512,16 @@ class StationService:
             ch_resp = await self._post('/ws/charger/curCharger', json={"cpKeyList": [cp_key]})
             logger.info("curCharger response for %s: %s", cp_key, str(ch_resp)[:2000])
             if isinstance(ch_resp, list):
-                    # 상태 코드 매핑 테이블 (외부 제공 숫자 코드 -> 사람 읽기 좋은 문자열)
-                    STATUS_CODE_MAP = {
-                        0: "UNKNOWN",
-                        1: "CHARGING",
-                        2: "AVAILABLE",
-                        3: "OUT_OF_ORDER",
-                        4: "MAINTENANCE",
-                        5: "RESERVED",
-                    }
-
-                    def map_status(code):
-                        # code가 None이면 None 반환, 숫자/문자열 모두 처리
-                        if code is None:
-                            return None
-                        try:
-                            ival = int(code)
-                            return STATUS_CODE_MAP.get(ival, f"UNKNOWN_{ival}")
-                        except Exception:
-                            # 이미 문자열인 경우 그대로 반환
-                            return str(code)
-
                     for c in ch_resp:
-                        charger_id = str(c.get('chargerId') or c.get('id') or c.get('csId') or c.get('csId') )
+                        charger_id = str(c.get('chargerId') or c.get('id') or c.get('csId') or c.get('csId'))
                         numeric_status = c.get('csStatCode') if 'csStatCode' in c else c.get('status')
+                        connectors = _normalize_connector_types(c.get('connectorType') or c.get('connector') or '')
                         chargers.append(ChargerDetail(
                             id=charger_id,
                             station_id=station_id,
-                            connector_types=[c.get('connectorType') or c.get('connector') or ''],
+                            connector_types=connectors,
                             max_power_kw=c.get('outputKw') or c.get('output') or None,
-                            status=map_status(numeric_status),
+                            status=_map_status(numeric_status),
                             manufacturer=c.get('maker') or c.get('manufacturer'),
                             model=c.get('model') or c.get('modelNm'),
                             bid=c.get('bid'),
@@ -515,6 +557,28 @@ class StationService:
         extra_info = {k: v for k, v in item.items() if k not in ("csList", "id", "cpId", "cpName", "addr", "lat", "lon", "x", "y")}
         if coords_missing:
             extra_info.setdefault('notes', {})['coords_fallback'] = True
+
+        # compute charger_count from chargers list
+        charger_count_computed = len(chargers) if chargers is not None else 0
+        # If coords missing, try to compute average coords from chargers' raw fields
+        if coords_missing and chargers:
+            lat_sum = 0.0
+            lon_sum = 0.0
+            count_coords = 0
+            for c in chargers:
+                raw = c.raw if hasattr(c, 'raw') and c.raw else c.get('raw') if isinstance(c, dict) else None
+                if raw:
+                    coords = _extract_coords_from_raw(raw)
+                    if coords:
+                        lat_sum += coords[0]
+                        lon_sum += coords[1]
+                        count_coords += 1
+            if count_coords > 0:
+                lat_val = lat_sum / count_coords
+                lon_val = lon_sum / count_coords
+                # unset coords_missing because we successfully filled them
+                coords_missing = False
+                extra_info.setdefault('notes', {})['coords_fallback_from_chargers'] = True
 
         # Build StationDetail using available station item and populated chargers.
         detail = StationDetail(
