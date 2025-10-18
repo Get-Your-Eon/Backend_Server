@@ -567,13 +567,36 @@ class StationService:
             lon_sum = 0.0
             count_coords = 0
             for c in chargers:
-                raw = c.raw if hasattr(c, 'raw') and c.raw else c.get('raw') if isinstance(c, dict) else None
+                # raw payload may be stored either on the pydantic object or dict form
+                raw = None
+                if hasattr(c, 'raw') and getattr(c, 'raw'):
+                    raw = getattr(c, 'raw')
+                elif isinstance(c, dict):
+                    raw = c.get('raw')
+                # try extracting coords from known keys first
                 if raw:
                     coords = _extract_coords_from_raw(raw)
                     if coords:
                         lat_sum += coords[0]
                         lon_sum += coords[1]
                         count_coords += 1
+                        continue
+                # As a fallback, try parsing common string fields on the charger record
+                # Some providers embed lat/lon on top-level charger fields like 'lat'/'lon' or 'y'/'x'
+                if isinstance(c, dict):
+                    maybe_lat = c.get('lat') or c.get('y') or c.get('latitude')
+                    maybe_lon = c.get('lon') or c.get('x') or c.get('longitude')
+                    try:
+                        if maybe_lat is not None and maybe_lon is not None:
+                            lat_f = float(maybe_lat)
+                            lon_f = float(maybe_lon)
+                            # ignore zero coords
+                            if lat_f != 0.0 or lon_f != 0.0:
+                                lat_sum += lat_f
+                                lon_sum += lon_f
+                                count_coords += 1
+                    except Exception:
+                        pass
             if count_coords > 0:
                 lat_val = lat_sum / count_coords
                 lon_val = lon_sum / count_coords
