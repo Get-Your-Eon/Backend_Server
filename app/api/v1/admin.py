@@ -1,4 +1,7 @@
 from fastapi import APIRouter, Header, HTTPException, status, Depends
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.database import get_async_session
 from pydantic import BaseModel
 from typing import Optional
 from app.core.config import settings
@@ -51,5 +54,23 @@ async def delete_cache_key_frontend(req: CacheKeyRequest, _ok: bool = Depends(fr
     try:
         deleted = await redis_client.delete(req.key)
         return {"deleted": bool(deleted), "key": req.key}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/inspect-db/station/{station_id}")
+async def inspect_station_db_admin(station_id: str, db: AsyncSession = Depends(get_async_session), _ok: bool = Depends(frontend_api_key_required)):
+    """Read-only: return ST_AsText(location) for given station id from DB.
+
+    Restricted to frontend API keys to avoid exposing admin credentials.
+    """
+    try:
+        q = text("SELECT id, ST_AsText(location) as location_text FROM stations WHERE id = :id LIMIT 1")
+        result = await db.execute(q, {"id": station_id})
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="station not found")
+        m = row._mapping
+        return {"id": m.get("id"), "location_text": m.get("location_text")}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
