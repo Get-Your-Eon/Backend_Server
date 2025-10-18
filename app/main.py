@@ -234,13 +234,19 @@ async def delete_station_cache_unlocked(payload: dict = Body(...), _ok: bool = D
 @app.get("/api/v1/admin/db-inspect/station/{station_id}")
 async def db_inspect_station(station_id: str, db: AsyncSession = Depends(get_async_session), _ok: bool = Depends(frontend_api_key_required)):
     try:
-        q = text("SELECT id, ST_AsText(location) as location_text FROM stations WHERE id = :id LIMIT 1")
+        # Allow lookup by station_code (string external id) or by numeric PK (id::text)
+        q = text(
+            "SELECT id, station_code, ST_AsText(location) as location_text "
+            "FROM stations "
+            "WHERE station_code = :id OR id::text = :id "
+            "LIMIT 1"
+        )
         result = await db.execute(q, {"id": station_id})
         row = result.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="station not found")
         m = row._mapping
-        return {"id": m.get("id"), "location_text": m.get("location_text")}
+        return {"id": m.get("id"), "station_code": m.get("station_code"), "location_text": m.get("location_text")}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
