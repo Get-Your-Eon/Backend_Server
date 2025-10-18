@@ -14,12 +14,18 @@ async def inspect_station_db(station_id: str, db: AsyncSession = Depends(get_asy
     Returns: { "id": str, "location_text": str | null }
     """
     try:
-        q = text("SELECT id, ST_AsText(location) as location_text FROM stations WHERE id = :id LIMIT 1")
+        # Allow lookup by station_code (string external id) or by numeric PK (id::text)
+        q = text(
+            "SELECT id, station_code, ST_AsText(location) as location_text "
+            "FROM stations "
+            "WHERE station_code = :id OR id::text = :id "
+            "LIMIT 1"
+        )
         result = await db.execute(q, {"id": station_id})
         row = result.fetchone()
         if not row:
             raise HTTPException(status_code=404, detail="station not found")
         m = row._mapping
-        return {"id": m.get("id"), "location_text": m.get("location_text")}
+        return {"id": m.get("id"), "station_code": m.get("station_code"), "location_text": m.get("location_text")}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
