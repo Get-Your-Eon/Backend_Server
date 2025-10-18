@@ -3,7 +3,8 @@ import time
 from datetime import datetime
 import os
 
-from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Header
+from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Header, Body
+from typing import Optional
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
@@ -247,6 +248,44 @@ async def db_inspect_station(station_id: str, db: AsyncSession = Depends(get_asy
             raise HTTPException(status_code=404, detail="station not found")
         m = row._mapping
         return {"id": m.get("id"), "station_code": m.get("station_code"), "location_text": m.get("location_text")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Temporary top-level admin endpoint to set station location directly (quick fallback)
+@app.post("/admin/set-location")
+async def main_set_location(payload: dict = Body(...), x_admin_key: Optional[str] = Header(None), db: AsyncSession = Depends(get_async_session)):
+    """Quick admin endpoint to set stations.location when admin router isn't available in the deployed build.
+
+    Body: { "station_id": "CG_CGH00140", "lat": 37.123, "lon": 127.456 }
+    Header: x-admin-key: <ADMIN_API_KEY>
+    """
+    if not settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Admin API not configured")
+    if x_admin_key != settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid admin key")
+
+    station_id = payload.get("station_id")
+    lat = payload.get("lat")
+    lon = payload.get("lon")
+    if not station_id or lat is None or lon is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="station_id, lat and lon are required in body")
+
+    try:
+        q = text(
+            "UPDATE stations SET location = ST_SetSRID(ST_MakePoint(:lon, :lat),4326), updated_at = now() "
+            "WHERE station_code = :id OR id::text = :id "
+            "RETURNING id, station_code, ST_AsText(location) as location_text"
+        )
+        result = await db.execute(q, {"lon": lon, "lat": lat, "id": station_id})
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="station not found")
+        await db.commit()
+        m = row._mapping
+        return {"id": m.get("id"), "station_code": m.get("station_code"), "location_text": m.get("location_text")}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
