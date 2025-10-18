@@ -467,10 +467,11 @@ class StationService:
                             if (c.get('cpId') or c.get('cpid') or '') == requested_cpId:
                                 charger_id = str(c.get('chargerId') or c.get('id') or c.get('csId') or c.get('csId'))
                                 numeric_status = c.get('csStatCode') if 'csStatCode' in c else c.get('status')
+                                connectors = _normalize_connector_types(c.get('connectorType') or c.get('connector') or '')
                                 chargers.append(ChargerDetail(
                                     id=charger_id,
                                     station_id=station_id,
-                                    connector_types=[c.get('connectorType') or c.get('connector') or ''],
+                                    connector_types=connectors,
                                     max_power_kw=c.get('outputKw') or c.get('output') or None,
                                     status=str(numeric_status) if numeric_status is not None else None,
                                     manufacturer=c.get('maker') or c.get('manufacturer'),
@@ -588,7 +589,8 @@ class StationService:
             lat=lat_val,
             lon=lon_val,
             extra_info=extra_info,
-            chargers=[c.dict() if hasattr(c, 'dict') else c for c in chargers]
+            chargers=[c.dict() if hasattr(c, 'dict') else c for c in chargers],
+            charger_count=charger_count_computed
         )
 
         # If mismatch was detected or coords are missing, but we have charger records,
@@ -602,7 +604,8 @@ class StationService:
                 lat=detail.lat,
                 lon=detail.lon,
                 extra_info={**(detail.extra_info or {}), 'fallback_from_chargers': True},
-                chargers=[c.dict() if hasattr(c, 'dict') else c for c in chargers]
+                chargers=[c.dict() if hasattr(c, 'dict') else c for c in chargers],
+                charger_count=charger_count_computed
             )
             try:
                 await set_cache(cache_key, fallback_detail.dict())
