@@ -4,7 +4,7 @@ from typing import Optional
 from app.core.config import settings
 from app.redis_client import get_redis_client
 
-router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin"])
 
 
 class CacheKeyRequest(BaseModel):
