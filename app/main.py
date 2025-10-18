@@ -24,6 +24,7 @@ from app.redis_client import (
 )
 from app.api.v1.api import api_router
 from app.api.deps import frontend_api_key_required
+from fastapi import Body
 
 # --- 환경 변수로 관리자 모드 판단 ---
 IS_ADMIN = os.getenv("ADMIN_MODE", "false").lower() == "true"
@@ -208,6 +209,22 @@ async def admin_data():
     return {"msg": "관리자 전용 데이터입니다."}
 
 app.include_router(admin_router, prefix="/admin")
+
+
+# Temporary endpoint: allow frontend API key holders to delete station detail cache keys
+@app.post("/admin/cache-unlocked")
+async def delete_station_cache_unlocked(payload: dict = Body(...), _ok: bool = Depends(frontend_api_key_required)):
+    key = payload.get("key")
+    if not key or not key.startswith("station:detail:"):
+        raise HTTPException(status_code=400, detail="Only station detail keys are allowed")
+    redis_client = await get_redis_client()
+    if not redis_client:
+        raise HTTPException(status_code=503, detail="Redis not available")
+    try:
+        deleted = await redis_client.delete(key)
+        return {"deleted": bool(deleted), "key": key}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --- DB 연결 테스트 / 간단 조회 엔드포인트 ---
 @app.get("/db-test", tags=["Infrastructure"], summary="DB 연결 및 보조금(subsidy) 조회 테스트")
