@@ -7,6 +7,9 @@ from typing import Optional
 from app.core.config import settings
 from app.redis_client import get_redis_client
 from app.api.deps import frontend_api_key_required
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.database import get_async_session
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -78,5 +81,42 @@ async def inspect_station_db_admin(station_id: str, db: AsyncSession = Depends(g
             raise HTTPException(status_code=404, detail="station not found")
         m = row._mapping
         return {"id": m.get("id"), "station_code": m.get("station_code"), "location_text": m.get("location_text")}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class SetLocationRequest(BaseModel):
+    station_id: str
+    lat: float
+    lon: float
+
+
+@router.post("/set-location")
+async def set_station_location(req: SetLocationRequest, x_admin_key: Optional[str] = Header(None), db: AsyncSession = Depends(get_async_session)):
+    """Admin: set or update stations.location for a station identified by station_code or id.
+
+    Body: { "station_id": "CG_CGH00140", "lat": 37.123, "lon": 127.456 }
+    Header: x-admin-key: <ADMIN_API_KEY>
+    """
+    if not settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Admin API not configured")
+    if x_admin_key != settings.ADMIN_API_KEY:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid admin key")
+
+    try:
+        q = text(
+            "UPDATE stations SET location = ST_SetSRID(ST_MakePoint(:lon, :lat),4326), updated_at = now() "
+            "WHERE station_code = :id OR id::text = :id "
+            "RETURNING id, station_code, ST_AsText(location) as location_text"
+        )
+        result = await db.execute(q, {"lon": req.lon, "lat": req.lat, "id": req.station_id})
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="station not found")
+        await db.commit()
+        m = row._mapping
+        return {"id": m.get("id"), "station_code": m.get("station_code"), "location_text": m.get("location_text")}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
