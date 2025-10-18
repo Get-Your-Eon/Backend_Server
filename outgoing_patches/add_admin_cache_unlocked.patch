@@ -1,0 +1,24 @@
+*** Begin Patch
+*** Update File: app/main.py
+@@
+ from app.api.deps import frontend_api_key_required
+ from fastapi import Body
+@@
+ app.include_router(admin_router, prefix="/admin")
+ 
+ 
+ # Temporary endpoint: allow frontend API key holders to delete station detail cache keys
+ @app.post("/admin/cache-unlocked")
+ async def delete_station_cache_unlocked(payload: dict = Body(...), _ok: bool = Depends(frontend_api_key_required)):
+     key = payload.get("key")
+     if not key or not key.startswith("station:detail:"):
+         raise HTTPException(status_code=400, detail="Only station detail keys are allowed")
+     redis_client = await get_redis_client()
+     if not redis_client:
+         raise HTTPException(status_code=503, detail="Redis not available")
+     try:
+         deleted = await redis_client.delete(key)
+         return {"deleted": bool(deleted), "key": key}
+     except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+*** End Patch
