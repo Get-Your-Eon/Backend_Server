@@ -25,6 +25,9 @@ from app.redis_client import (
 from app.api.v1.api import api_router
 from app.api.deps import frontend_api_key_required
 from fastapi import Body
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.db.database import get_async_session
 
 # --- 환경 변수로 관리자 모드 판단 ---
 IS_ADMIN = os.getenv("ADMIN_MODE", "false").lower() == "true"
@@ -223,6 +226,21 @@ async def delete_station_cache_unlocked(payload: dict = Body(...), _ok: bool = D
     try:
         deleted = await redis_client.delete(key)
         return {"deleted": bool(deleted), "key": key}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Temporary DB inspect endpoint (read-only) — returns ST_AsText(location) for given station id
+@app.get("/api/v1/admin/db-inspect/station/{station_id}")
+async def db_inspect_station(station_id: str, db: AsyncSession = Depends(get_async_session), _ok: bool = Depends(frontend_api_key_required)):
+    try:
+        q = text("SELECT id, ST_AsText(location) as location_text FROM stations WHERE id = :id LIMIT 1")
+        result = await db.execute(q, {"id": station_id})
+        row = result.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="station not found")
+        m = row._mapping
+        return {"id": m.get("id"), "location_text": m.get("location_text")}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
