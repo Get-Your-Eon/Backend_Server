@@ -310,6 +310,11 @@ class StationService:
         # representations are passed in by clients.
         cache_key = f"station:detail:{cp_key}"
         cached = await get_cache(cache_key)
+        # lightweight debug: log whether cache hit and the cp_key being requested
+        try:
+            logger.info("get_station_detail called: station_id=%s cp_key=%s cache_hit=%s", station_id, cp_key, bool(cached))
+        except Exception:
+            pass
         if cached:
             return StationDetail(**cached)
 
