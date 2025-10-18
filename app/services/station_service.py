@@ -433,7 +433,7 @@ class StationService:
                             lat=0.0,
                             lon=0.0,
                             extra_info={'fallback_from_chargers': True},
-                            chargers=chargers
+                            chargers=[c.dict() if hasattr(c, 'dict') else c for c in chargers]
                         )
                         try:
                             await set_cache(cache_key, fallback_detail.dict())
@@ -524,7 +524,7 @@ class StationService:
             lat=lat_val,
             lon=lon_val,
             extra_info=extra_info,
-            chargers=chargers
+            chargers=[c.dict() if hasattr(c, 'dict') else c for c in chargers]
         )
 
         # If mismatch was detected or coords are missing, but we have charger records,
@@ -538,7 +538,7 @@ class StationService:
                 lat=detail.lat,
                 lon=detail.lon,
                 extra_info={**(detail.extra_info or {}), 'fallback_from_chargers': True},
-                chargers=chargers
+                chargers=[c.dict() if hasattr(c, 'dict') else c for c in chargers]
             )
             try:
                 await set_cache(cache_key, fallback_detail.dict())
