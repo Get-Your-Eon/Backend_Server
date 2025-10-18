@@ -517,15 +517,33 @@ class StationService:
             extra_info.setdefault('notes', {})['coords_fallback'] = True
 
         # Build StationDetail using available station item and populated chargers.
-        detail = StationDetail(
-            id=station_id,
-            name=item.get('cpName') or item.get('cp_name') or '',
-            address=item.get('addr') or item.get('roadName') or item.get('address'),
-            lat=lat_val,
-            lon=lon_val,
-            extra_info=extra_info,
-            chargers=[c.dict() if hasattr(c, 'dict') else c for c in chargers]
-        )
+        try:
+            detail = StationDetail(
+                id=station_id,
+                name=item.get('cpName') or item.get('cp_name') or '',
+                address=item.get('addr') or item.get('roadName') or item.get('address'),
+                lat=lat_val,
+                lon=lon_val,
+                extra_info=extra_info,
+                chargers=[c.dict() if hasattr(c, 'dict') else c for c in chargers]
+            )
+        except Exception:
+            # If validation/serialization fails, return a minimal charger-driven fallback instead
+            logger.exception("StationDetail validation failed for %s; returning charger-driven fallback", station_id)
+            fallback_detail = StationDetail(
+                id=station_id,
+                name=item.get('cpName') or f"Station {station_id}",
+                address=item.get('addr') or None,
+                lat=lat_val,
+                lon=lon_val,
+                extra_info={**(extra_info or {}), 'fallback_from_chargers': True, 'validation_error': True},
+                chargers=[c.dict() if hasattr(c, 'dict') else c for c in chargers]
+            )
+            try:
+                await set_cache(cache_key, fallback_detail.dict())
+            except Exception:
+                logger.debug("Failed to set cache for fallback after validation error %s", cache_key)
+            return fallback_detail
 
         # If mismatch was detected or coords are missing, but we have charger records,
         # prefer returning a charger-driven StationDetail so the client still gets charger specs.
