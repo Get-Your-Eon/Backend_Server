@@ -68,3 +68,4 @@ yarn-error.log*
 /config/
 serverinfo.dat
 codyssey_backup.sql
+tmp/
