@@ -35,6 +35,8 @@ class Station(Base):
     # raw JSON from upstream provider for debugging / future fields
     raw_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     provider: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Kepco specific station id (csId)
+    cs_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     location = Column(Geometry(geometry_type='POINT', srid=4326), index=True)
     last_synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
 
@@ -62,6 +64,10 @@ class Charger(Base):
     connector_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     # additional external metadata
     external_charger_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # raw status code from upstream provider (string like '1','2',...)
+    cp_stat_raw: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # timestamp when upstream reported status
+    stat_update_datetime: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
     manufacturer: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     connector_types: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)

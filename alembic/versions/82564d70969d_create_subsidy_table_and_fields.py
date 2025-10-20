@@ -149,7 +149,7 @@ def upgrade() -> None:
                comment=None,
                existing_comment='레코드 최종 수정 시각',
                existing_nullable=False)
-    op.drop_index(op.f('ix_stations_name'), table_name='stations')
+    op.execute("DROP INDEX IF EXISTS ix_stations_name;")
     # ### end Alembic commands ###
 
 
@@ -248,8 +248,8 @@ def downgrade() -> None:
                comment='요청 엔드포인트',
                existing_nullable=False)
     op.drop_column('api_logs', 'response_msg')
-    op.drop_index(op.f('ix_subsidies_model_group'), table_name='subsidies')
-    op.drop_index(op.f('ix_subsidies_manufacturer'), table_name='subsidies')
-    op.drop_index(op.f('ix_subsidies_id'), table_name='subsidies')
+    op.execute("DROP INDEX IF EXISTS ix_subsidies_model_group;")
+    op.execute("DROP INDEX IF EXISTS ix_subsidies_manufacturer;")
+    op.execute("DROP INDEX IF EXISTS ix_subsidies_id;")
     op.drop_table('subsidies')
     # ### end Alembic commands ###

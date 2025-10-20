@@ -37,7 +37,8 @@ if config.config_file_name is not None:
 db_url_from_ini = config.get_main_option("sqlalchemy.url")
 
 # settings.DATABASE_URL을 사용하여 Render DB URL을 직접 설정합니다.
-if db_url_from_ini is None:
+# If the value from alembic.ini is missing or empty, fall back to settings.DATABASE_URL
+if not db_url_from_ini:
     # 🌟 [수정] settings에서 직접 DATABASE_URL을 가져와 사용
     db_url_from_ini = settings.DATABASE_URL
 
@@ -116,7 +117,7 @@ async def run_migrations_online_async():
         async_db_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     else:
         async_db_url = database_url
-
+    print(f"[DEBUG] DATABASE_URL: {database_url}")
     print(f"[DEBUG] ASYNC_DATABASE_URL being used: {async_db_url}")
 
     from sqlalchemy.ext.asyncio import create_async_engine

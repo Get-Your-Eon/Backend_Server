@@ -9,6 +9,7 @@ from app.redis_client import get_cache, set_cache, get_redis_client
 from app.schemas.station import StationSummary, StationDetail, ChargerDetail
 from app.repository.station import get_nearby_stations_db, upsert_stations_and_chargers
 from app.db.database import AsyncSessionLocal
+from app.services.kepco_adapter import KepcoAdapter
 from sqlalchemy.ext.asyncio import AsyncSession
 import asyncio
 
@@ -111,6 +112,14 @@ class StationService:
         self.auth_type = settings.EXTERNAL_STATION_API_AUTH_TYPE
         self.header_name = settings.EXTERNAL_STATION_API_KEY_HEADER_NAME
         self.timeout = settings.EXTERNAL_STATION_API_TIMEOUT_SECONDS
+        # Kepco adapter initialized with environment-driven params
+        self.kepco = KepcoAdapter(
+            base_url=self.base_url,
+            api_key=self.api_key,
+            key_param_name=getattr(settings, 'EXTERNAL_STATION_API_KEY_PARAM_NAME', 'apiKey'),
+            return_type=getattr(settings, 'EXTERNAL_STATION_API_RETURN_TYPE', 'json'),
+            timeout=getattr(settings, 'EXTERNAL_STATION_API_TIMEOUT_SEED_SECONDS', 30)
+        )
 
     def _build_headers(self) -> Dict[str, str]:
         headers = {"Accept": "application/json"}
@@ -121,7 +130,16 @@ class StationService:
     def _build_params(self) -> Dict[str, str]:
         params: Dict[str, str] = {}
         if self.api_key and self.auth_type == "query":
-            params["api_key"] = self.api_key
+            # allow configurable parameter name (e.g., Kepco uses 'apiKey')
+            key_name = getattr(settings, 'EXTERNAL_STATION_API_KEY_PARAM_NAME', 'apiKey')
+            params[key_name] = self.api_key
+        # allow forcing return type via env (json/xml)
+        try:
+            return_type = getattr(settings, 'EXTERNAL_STATION_API_RETURN_TYPE', None)
+            if return_type:
+                params['returnType'] = return_type
+        except Exception:
+            pass
         return params
 
     async def _get(self, path: str, params: Optional[Dict[str, Any]] = None) -> Any:
@@ -258,7 +276,8 @@ class StationService:
             "pageSize": int(limit)
         }
 
-        # POST 형식으로 충전소 목록을 요청
+    # Use Kepco adapter to search for items within bounding box.
+    # Kepco returns flat charger records in `data`; group by csId/cpId for stations.
         # To prevent thundering herd, acquire a simple redis lock per cache_key
         lock_key = f"lock:{cache_key}"
         redis_client = await get_redis_client()
@@ -278,90 +297,59 @@ class StationService:
             if cached2:
                 return [StationSummary(**s) for s in cached2]
 
-        payload = await self._post('/ws/chargePoint/curChargePoint', json=cond)
-
-        # Log returned station payload (truncated) for debugging charger specs
-        try:
-            import json as _json
-            raw_payload_text = _json.dumps(payload) if isinstance(payload, (dict, list)) else str(payload)
-        except Exception:
-            raw_payload_text = str(payload)
-        try:
-            logger.info("curChargePoint payload for cache=%s (lat=%s lon=%s): %s", cache_key, lat_f, lon_f, raw_payload_text[:2000])
-        except Exception:
-            # Defensive: if any local variable is not available or logging fails, don't crash the request
-            logger.debug("Skipping curChargePoint debug log due to missing context or logging error.")
-
-        items = []
-        if isinstance(payload, list):
-            items = payload
-        elif isinstance(payload, dict):
-            items = payload.get('result') or payload.get('data') or []
+        # Kepco adapter returns charger-level records; filter by bbox
+        items = await self.kepco.search(minLat, maxLat, minLng, maxLng, page=page, page_size=limit)
 
         summaries: List[StationSummary] = []
         cp_key_list: List[str] = []
+        # Kepco fields mapping: cpId, csId, cpNm, csNm, addr, lat, longi, cpStat, cpTp, statUpdateDatetime
+        # Group by station (csId) to compute station-level summary
+        stations_by_cs: Dict[str, Dict[str, Any]] = {}
         for it in items:
-            bid = it.get('bid') or ''
-            cpId = it.get('cpId') or it.get('cpid') or it.get('cp_id') or ''
-            cp_key = f"P{bid}{cpId}"
-            cp_key_list.append(cp_key)
-            lat_val = it.get('lat') or it.get('latitude') or it.get('y') or 0.0
-            lon_val = it.get('lon') or it.get('longitude') or it.get('x') or 0.0
+            csId = str(it.get('csId') or it.get('csid') or it.get('csId') or '')
+            cpId = str(it.get('cpId') or it.get('cpid') or '')
+            lat_val = it.get('lat') or it.get('latitude') or None
+            lon_val = it.get('longi') or it.get('longi') or it.get('longitude') or None
+            if csId not in stations_by_cs:
+                stations_by_cs[csId] = {
+                    'csId': csId,
+                    'csNm': it.get('csNm') or it.get('cs_name') or None,
+                    'addr': it.get('addr') or None,
+                    'lat': float(lat_val) if lat_val not in (None, '') else 0.0,
+                    'lon': float(lon_val) if lon_val not in (None, '') else 0.0,
+                    'chargers': set()
+                }
+            stations_by_cs[csId]['chargers'].add(cpId or (it.get('cpNm') or ''))
 
-            name = it.get('cpName') or it.get('cp_name') or it.get('station_name') or ''
-            address = it.get('addr') or it.get('roadName') or it.get('address')
-
-            # 거리 정보는 외부에서 '0.71' 같은 소수(km) 또는 정수(미터)로 올 수 있으므로
-            # 안전하게 정수(미터)로 변환합니다. 소수값이 10보다 작으면 km로 간주하고 *1000 변환.
-            raw_dis = it.get('dis') or it.get('distance') or it.get('distance_m')
-            distance_m = None
-            if raw_dis is not None:
-                try:
-                    d = float(raw_dis)
-                    if d < 10:
-                        # 보통 0.71 처럼 올 경우 km 단위로 보정
-                        distance_m = int(round(d * 1000))
-                    else:
-                        # 이미 미터 단위로 온 경우
-                        distance_m = int(round(d))
-                except Exception:
-                    distance_m = None
-
+        for cs, info in stations_by_cs.items():
             summaries.append(StationSummary(
-                id=f"{bid}_{cpId}",
-                name=name,
-                address=address,
-                lat=float(lat_val) if lat_val is not None else 0.0,
-                lon=float(lon_val) if lon_val is not None else 0.0,
-                distance_m=distance_m,
-                charger_count=None
+                id=str(info.get('csId')),
+                name=info.get('csNm') or f"Station {info.get('csId')}",
+                address=info.get('addr'),
+                lat=float(info.get('lat') or 0.0),
+                lon=float(info.get('lon') or 0.0),
+                distance_m=None,
+                charger_count=len(info.get('chargers') or [])
             ))
 
         # 충전기 상세를 얻어 각 충전소의 충전기 수를 채웁니다.
-        try:
-            if cp_key_list:
-                charger_resp = await self._post('/ws/charger/curCharger', json={"cpKeyList": cp_key_list})
-                # charger_resp는 리스트로 반환되는 것이 JS에서 관찰됨
-                if isinstance(charger_resp, list):
-                    # 각 항목에 대해 bid+cpId 조합으로 매핑
-                    counts: Dict[str, int] = {}
-                    for ch in charger_resp:
-                        bid = ch.get('bid') or ''
-                        cpId = ch.get('cpId') or ch.get('cpid') or ''
-                        key = f"{bid}_{cpId}"
-                        counts[key] = counts.get(key, 0) + 1
-                    for s in summaries:
-                        s.charger_count = counts.get(s.id, 0)
-        except Exception:
-            # 충전기 조회 실패는 전체 검색 실패로 연결하지 않음
-            pass
+        # No additional charger lookup is necessary as Kepco returns charger-level rows
 
         # persist results to DB (best-effort)
+        # Persist station summaries as best-effort (DB expects stations+chargers)
         try:
             async with AsyncSessionLocal() as session:
-                await upsert_stations_and_chargers(session, [s.dict() for s in summaries])
+                # Convert to minimal upsert shape: for each station, include empty chargers list
+                await upsert_stations_and_chargers(session, [{
+                    'id': s.id,
+                    'name': s.name,
+                    'address': s.address,
+                    'lat': s.lat,
+                    'lon': s.lon,
+                    'chargers': []
+                } for s in summaries])
         except Exception:
-            pass
+            logger.exception("Failed to upsert stations from Kepco search")
 
         await set_cache(cache_key, [s.dict() for s in summaries])
         if redis_client and have_lock:
@@ -393,174 +381,125 @@ class StationService:
         if cached:
             return StationDetail(**cached)
 
-        # 먼저 충전소 기본 정보를 가져옵니다. curChargePoint에 cpKeyList로 요청하면
-        # 해당 충전소(들)의 정보가 반환됩니다.
-        cond = {"cpKeyList": [cp_key], "searchStatus": False}
-        payload = await self._post('/ws/chargePoint/curChargePoint', json=cond)
+        # For Kepco API, station and charger rows are returned in the same data set.
+        # We query items with matching csId (station id) or cpId (charger id) and
+        # aggregate chargers under their csId.
+        # Attempt to find station rows by csId (station id). If the input is of form
+        # '{csId}' we directly use it; if it's a cpKey-like id, try to extract csId.
+        cs_id = station_id
+        if station_id.startswith('P'):
+            # Attempt to parse P{bid}{cpId} -> we don't have csId directly; fallback to full scan
+            cs_id = None
+        elif '_' in station_id:
+            # legacy '{bid}_{cpId}' form — can't reliably map to csId; fallback to searching by cpId
+            cs_id = None
 
-        item = None
-        if isinstance(payload, list) and len(payload) > 0:
-            item = payload[0]
-        elif isinstance(payload, dict):
-            # 일부 응답은 {result: [...]} 구조일 수 있음
-            arr = payload.get('result') or payload.get('data') or []
-            if arr:
-                item = arr[0]
+        # Fetch all items (or filtered by addr) and locate relevant rows
+        items = []
+        try:
+            items = await self.kepco._fetch_all()
+        except Exception:
+            raise ExternalAPIError('Failed to fetch data from Kepco API')
 
-        if not item:
-            raise ExternalAPIError('Station not found from external API')
+        # find station-level item(s)
+        station_items = []
+        charger_items = []
+        for it in items:
+            # normalize keys
+            this_cs = str(it.get('csId') or it.get('csid') or '')
+            this_cp = str(it.get('cpId') or it.get('cpid') or '')
+            if cs_id and this_cs and cs_id == this_cs:
+                station_items.append(it)
+            if '_' in station_id:
+                # if input is bid_cpId, match cpId
+                _, requested_cp = station_id.split('_', 1)
+                if this_cp == requested_cp:
+                    charger_items.append(it)
+            # if input equals cpId
+            if station_id == this_cp:
+                charger_items.append(it)
 
-        # Ensure the returned station payload actually matches the requested cp_key
-        # Some external endpoints may return a fallback/default record when cp_key is not found.
-        # If the returned bid/cpId do not match the requested cp_key, treat as not found.
-        returned_bid = item.get('bid') or ''
-        returned_cpId = item.get('cpId') or item.get('cpid') or ''
-        # requested bid/cpId derived from cp_key: cp_key = 'P{bid}{cpId}'
-        req = cp_key[1:]
+        # If no explicit station_items found, but charger_items exist, derive station info from chargers
+        # mismatch_detected indicates we had to fall back to charger-level records
         mismatch_detected = False
-        if req and not req.endswith(returned_cpId):
-            # mismatch: sometimes the station endpoint returns a generic/fallback record
-            # while charger endpoint contains the actual cpId we asked for. Attempt to
-            # find station info from charger_payload if possible.
-            try:
-                ch_resp = await self._post('/ws/charger/curCharger', json={"cpKeyList": [cp_key]})
-            except Exception:
-                ch_resp = None
-
-            found_station_info = None
-            if isinstance(ch_resp, list):
-                for ch in ch_resp:
-                    if (ch.get('bid', '') + (ch.get('cpId') or ch.get('cpid') or '')) == req:
-                        # found matching charger record that corresponds to our requested cp_key
-                        found_station_info = {
-                            'bid': ch.get('bid'),
-                            'cpId': ch.get('cpId') or ch.get('cpid')
-                        }
-                        break
-
-            if found_station_info:
-                # re-query station endpoint with the found charger-derived cpId to get accurate station info
-                new_cp_key = f"P{found_station_info['bid']}{found_station_info['cpId']}"
-                try:
-                    new_payload = await self._post('/ws/chargePoint/curChargePoint', json={"cpKeyList": [new_cp_key], "searchStatus": False})
-                    new_item = None
-                    if isinstance(new_payload, list) and len(new_payload) > 0:
-                        new_item = new_payload[0]
-                    elif isinstance(new_payload, dict):
-                        arr = new_payload.get('result') or new_payload.get('data') or []
-                        if arr:
-                            new_item = arr[0]
-                    if new_item:
-                        item = new_item
-                        cp_key = new_cp_key
-                        cache_key = f"station:detail:{cp_key}"
-                    else:
-                        # fallback to minimal override if re-query failed
-                        item['bid'] = found_station_info['bid']
-                        item['cpId'] = found_station_info['cpId']
-                except Exception:
-                    # re-query failed; still fallback to minimal override
-                    item['bid'] = found_station_info['bid']
-                    item['cpId'] = found_station_info['cpId']
-                mismatch_detected = True
-            else:
-                logger.warning("Requested cp_key=%s but external returned bid=%s cpId=%s; no matching charger record found; treating as not found", cp_key, returned_bid, returned_cpId)
-                # Try a last-resort fallback: if charger endpoint contains entries that match the requested cpId
-                try:
-                    cp_found = None
-                    if isinstance(ch_resp, list):
-                        for ch in ch_resp:
-                            # compare using parsed cpId from incoming station_id
-                            if '_' in station_id:
-                                _, requested_cpId = station_id.split('_', 1)
-                            else:
-                                requested_cpId = station_id
-                            if (ch.get('cpId') or ch.get('cpid') or '') == requested_cpId:
-                                cp_found = ch
-                                break
-                    if cp_found:
-                        # build chargers list from ch_resp entries that match requested_cpId
-                        chargers = []
-                        for c in ch_resp:
-                            if (c.get('cpId') or c.get('cpid') or '') == requested_cpId:
-                                charger_id = str(c.get('chargerId') or c.get('id') or c.get('csId') or c.get('csId'))
-                                numeric_status = c.get('csStatCode') if 'csStatCode' in c else c.get('status')
-                                connectors = _normalize_connector_types(c.get('connectorType') or c.get('connector') or '')
-                                chargers.append(ChargerDetail(
-                                    id=charger_id,
-                                    station_id=station_id,
-                                    connector_types=connectors,
-                                    max_power_kw=c.get('outputKw') or c.get('output') or None,
-                                    status=str(numeric_status) if numeric_status is not None else None,
-                                    manufacturer=c.get('maker') or c.get('manufacturer'),
-                                    model=c.get('model') or c.get('modelNm'),
-                                    bid=c.get('bid'),
-                                    cpId=c.get('cpId') or c.get('cpid'),
-                                    charger_code=c.get('csId'),
-                                    cs_cat_code=c.get('csCatCode'),
-                                    info_coll_date=c.get('infoCollDate'),
-                                    status_code=c.get('csStatCode'),
-                                    ch_start_date=c.get('chStartDate'),
-                                    last_ch_start_date=c.get('lastChStartDate'),
-                                    last_ch_end_date=c.get('lastChEndDate'),
-                                    updated_at=c.get('updateDate'),
-                                    raw=c
-                                ))
-                        # avoid referencing undefined extra_info here; use neutral placeholders
-                        # Do NOT use item.get('cpName') because the 'item' may be an unrelated
-                        # provider fallback. Use a neutral station name and mark that we
-                        # suppressed an unrelated station name.
-                        fallback_detail = StationDetail(
-                            id=station_id,
-                            name=f"Station {station_id}",
-                            address=None,
-                            lat=0.0,
-                            lon=0.0,
-                            extra_info={'fallback_from_chargers': True, 'suppressed_unrelated_station_name': True},
-                            chargers=[c.dict() if hasattr(c, 'dict') else c for c in chargers]
-                        )
-                        try:
-                            await set_cache(cache_key, fallback_detail.dict())
-                        except Exception:
-                            logger.debug("Failed to set cache for fallback %s", cache_key)
-                        return fallback_detail
-                except Exception:
-                    pass
-                raise ExternalAPIError('Station not found from external API')
+        item = None
+        if station_items:
+            item = station_items[0]
+        elif charger_items:
+            # We couldn't find a station-level row; we'll derive station info from charger rows
+            mismatch_detected = True
+            item = charger_items[0]
+        else:
+            raise ExternalAPIError('Station not found from Kepco API')
 
         # charger 상세 조회
-        chargers: List[ChargerDetail] = []
-        try:
-            ch_resp = await self._post('/ws/charger/curCharger', json={"cpKeyList": [cp_key]})
-            logger.info("curCharger response for %s: %s", cp_key, str(ch_resp)[:2000])
-            if isinstance(ch_resp, list):
-                    for c in ch_resp:
-                        charger_id = str(c.get('chargerId') or c.get('id') or c.get('csId') or c.get('csId'))
-                        numeric_status = c.get('csStatCode') if 'csStatCode' in c else c.get('status')
-                        connectors = _normalize_connector_types(c.get('connectorType') or c.get('connector') or '')
-                        chargers.append(ChargerDetail(
-                            id=charger_id,
-                            station_id=station_id,
-                            connector_types=connectors,
-                            max_power_kw=c.get('outputKw') or c.get('output') or None,
-                            status=_map_status(numeric_status),
-                            manufacturer=c.get('maker') or c.get('manufacturer'),
-                            model=c.get('model') or c.get('modelNm'),
-                            bid=c.get('bid'),
-                            cpId=c.get('cpId'),
-                            charger_code=c.get('csId'),
-                            cs_cat_code=c.get('csCatCode'),
-                            info_coll_date=c.get('infoCollDate'),
-                            status_code=c.get('csStatCode'),
-                            ch_start_date=c.get('chStartDate'),
-                            last_ch_start_date=c.get('lastChStartDate'),
-                            last_ch_end_date=c.get('lastChEndDate'),
-                            updated_at=c.get('updateDate'),
-                            raw=c
-                        ))
-        except Exception:
-            # 충전기 상세 실패는 무시하고 기본 정보만 반환
-            pass
+        # Build chargers list from items where csId matches or cpId matches
+        chargers = []
+        for it in items:
+            this_cs = str(it.get('csId') or it.get('csid') or '')
+            this_cp = str(it.get('cpId') or it.get('cpid') or '')
+            if (station_id and ('_' in station_id and this_cp == station_id.split('_',1)[1])) or (cs_id and this_cs == cs_id) or (station_id == this_cp):
+                connector_types = []
+                cpTp = it.get('cpTp')
+                if cpTp is not None:
+                    # map Kepco cpTp numeric codes to textual connector types
+                    try:
+                        ctp = int(cpTp)
+                        if ctp == 1:
+                            connector_types = ['B-type(5pin)']
+                        elif ctp == 2:
+                            connector_types = ['C-type(5pin)']
+                        elif ctp == 5:
+                            connector_types = ['CHAdeMO']
+                        elif ctp == 6:
+                            connector_types = ['AC3']
+                        elif ctp in (7,8):
+                            connector_types = ['DC Combo']
+                        else:
+                            connector_types = [str(cpTp)]
+                    except Exception:
+                        connector_types = [str(cpTp)]
+
+                status_code = it.get('cpStat')
+                # Kepco cpStat mapping: 1:충전가능 2:충전중 3:고장/점검 4:통신장애 5:통신미연결
+                status = None
+                try:
+                    sc = int(status_code)
+                    if sc == 1:
+                        status = 'AVAILABLE'
+                    elif sc == 2:
+                        status = 'CHARGING'
+                    elif sc == 3:
+                        status = 'OUT_OF_ORDER'
+                    elif sc == 4:
+                        status = 'COMMUNICATION_ERROR'
+                    elif sc == 5:
+                        status = 'NOT_CONNECTED'
+                    else:
+                        status = f'UNKNOWN_{sc}'
+                except Exception:
+                    status = str(status_code)
+
+                chargers.append(ChargerDetail(
+                    id=str(it.get('cpId') or it.get('cpid') or it.get('cpId')),
+                    station_id=str(it.get('csId') or it.get('csid') or ''),
+                    connector_types=connector_types,
+                    max_power_kw=None,
+                    status=status,
+                    manufacturer=None,
+                    model=None,
+                    bid=None,
+                    cpId=str(it.get('cpId') or it.get('cpid') or ''),
+                    charger_code=str(it.get('cpId') or it.get('cpid') or ''),
+                    cs_cat_code=None,
+                    info_coll_date=None,
+                    status_code=status_code,
+                    ch_start_date=None,
+                    last_ch_start_date=None,
+                    last_ch_end_date=None,
+                    updated_at=it.get('statUpdateDatetime'),
+                    raw=it
+                ))
 
         # parse lat/lon robustly: some provider payloads use 'x'/'y' while others use 'lat'/'lon' or 'latitude'/'longitude'
         raw_lat = item.get('y') or item.get('lat') or item.get('latitude') or item.get('latitudeValue')
