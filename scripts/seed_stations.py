@@ -12,6 +12,7 @@ Run:
   python scripts/seed_stations.py
 """
 import os
+import json
 import asyncio
 import time
 import httpx
@@ -157,10 +158,35 @@ async def main():
                 # be available here; leave connector_types empty for now.
                 charger_list = []
                 if cpId:
+                    # Normalize charger type: prefer cpTp (string). If ChargePointType is
+                    # a dict, extract cType keys with non-zero values or fallback to a
+                    # truncated JSON string to fit DB varchar(50).
+                    raw_type = it.get('cpTp')
+                    type_str = None
+                    if isinstance(raw_type, str):
+                        type_str = raw_type
+                    else:
+                        cpt = it.get('ChargePointType') or it.get('ChargePointType'.lower())
+                        if isinstance(cpt, dict):
+                            types = [k for k, v in cpt.items() if k.startswith('cType') and v]
+                            if types:
+                                type_str = ",".join(types)
+                            else:
+                                # Fallback to short JSON representation
+                                try:
+                                    j = json.dumps(cpt, ensure_ascii=False)
+                                    type_str = j[:50]
+                                except Exception:
+                                    type_str = None
+                        else:
+                            # Fallback: stringify whatever is present
+                            if raw_type is not None:
+                                type_str = str(raw_type)[:50]
+
                     charger_list.append({
                         "id": cpId,
                         "charger_code": cpId,
-                        "type": it.get('cpTp') or it.get('ChargePointType') or None,
+                        "type": type_str,
                         "connector_types": [],
                         "max_power_kw": None,
                         "raw": it
