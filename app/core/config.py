@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     EXTERNAL_STATION_API_AUTH_TYPE: str = "header"
     # 인증 헤더명(예: Authorization, X-API-KEY) - header 방식일 때 사용
     EXTERNAL_STATION_API_KEY_HEADER_NAME: str = "Authorization"
+    # 인증 쿼리 파라미터 이름(예: apiKey) - query 방식일 때 사용
+    EXTERNAL_STATION_API_KEY_PARAM_NAME: str = "apiKey"
+    # 응답 포맷 옵션 (json|xml)
+    EXTERNAL_STATION_API_RETURN_TYPE: str = "json"
+    # seed / batch 스크립트용 타임아웃(초)
+    EXTERNAL_STATION_API_TIMEOUT_SEED_SECONDS: int = 30
     # 외부 API 호출 타임아웃(초)
     EXTERNAL_STATION_API_TIMEOUT_SECONDS: int = 10
 

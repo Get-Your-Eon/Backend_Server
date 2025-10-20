@@ -26,6 +26,17 @@ ASYNC_DB = os.getenv("DATABASE_URL")
 BASE_URL = os.getenv("EXTERNAL_STATION_API_BASE_URL")
 API_KEY = os.getenv("EXTERNAL_STATION_API_KEY")
 AUTH_TYPE = os.getenv("EXTERNAL_STATION_API_AUTH_TYPE", "header")
+# Optional: limit pages processed during seed to avoid long-running or infinite
+# runs. Default is 10 pages when the variable is not set. Set SEED_MAX_PAGES=0
+# explicitly to disable the limit (not recommended on production datasets).
+raw_limit = os.getenv("SEED_MAX_PAGES")
+try:
+    if raw_limit is None:
+        SEED_MAX_PAGES = 10
+    else:
+        SEED_MAX_PAGES = int(raw_limit)
+except Exception:
+    SEED_MAX_PAGES = 10
 
 
 async def fetch_page(client: httpx.AsyncClient, page: int, page_size: int = 100):
@@ -36,14 +47,16 @@ async def fetch_page(client: httpx.AsyncClient, page: int, page_size: int = 100)
         "searchStatus": False
     }
     if API_KEY and AUTH_TYPE == "query":
-        params = {"serviceKey": API_KEY}
+        # Kepco expects apiKey as query parameter name and returnType=json
+        params = {"apiKey": API_KEY, "returnType": "json"}
     else:
         params = None
     headers = {"Accept": "application/json"}
     if API_KEY and AUTH_TYPE == "header":
         headers["Authorization"] = API_KEY
 
-    resp = await client.post(f"{BASE_URL.rstrip('/')}/ws/chargePoint/curChargePoint", json=cond, params=params, headers=headers, timeout=30)
+    # Kepco: use GET/POST to the EVchargeManage endpoint; prefer GET with params for discovery
+    resp = await client.get(f"{BASE_URL.rstrip('/')}", params=params, timeout=30)
     resp.raise_for_status()
     return resp.json()
 
@@ -63,7 +76,12 @@ async def main():
         page = 1
         page_size = 100
         total_fetched = 0
-        while True:
+    print(f"Starting seed: BASE_URL={BASE_URL}, SEED_MAX_PAGES={SEED_MAX_PAGES}")
+    while True:
+            # safety: stop if we've reached configured max pages
+            if SEED_MAX_PAGES > 0 and page > SEED_MAX_PAGES:
+                print(f"Reached SEED_MAX_PAGES={SEED_MAX_PAGES}, stopping.")
+                break
             try:
                 data = await fetch_page(client, page, page_size)
             except Exception as e:
@@ -122,9 +140,10 @@ async def main():
             total_fetched += len(parsed)
             print(f"Fetched page {page}, items: {len(parsed)}, total: {total_fetched}")
             page += 1
-            # rate limit modestly
-            time.sleep(0.2)
+            # rate limit modestly (use non-blocking sleep inside async loop)
+            await asyncio.sleep(0.2)
 
+    print(f"Seeding finished. Total fetched: {total_fetched}")
     await engine.dispose()
 
 
