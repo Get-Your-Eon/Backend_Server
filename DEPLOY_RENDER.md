@@ -11,6 +11,9 @@
 2. Render 대시보드에서 "New +" → Web Service 선택
 3. Repository provider (GitHub 등) 연결 → 이 리포지토리 선택
 
+(중요) 이 저장소는 Render에서 `render-origin` 원격(remote)과 `main` 브랜치를 사용하도록 구성되어 있습니다.
+배포 프로세스는 로컬에서 변경을 커밋한 뒤 `git push render-origin main` 으로 트리거됩니다. 아래 환경변수는 Render Dashboard의 Service > Environment 섹션에 등록하세요.
+
 환경변수(필수) — Render Dashboard에 등록
 (민감값은 반드시 Render UI에서 "Add Environment Variable"로 등록)
 - DATABASE_URL: postgresql://user:pass@host:5432/dbname
