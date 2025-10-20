@@ -16,9 +16,12 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column('stations', sa.Column('cs_id', sa.String(length=50), nullable=True))
-    op.add_column('chargers', sa.Column('cp_stat_raw', sa.String(length=20), nullable=True))
-    op.add_column('chargers', sa.Column('stat_update_datetime', sa.DateTime(), nullable=True))
+            # Execute single SQL statements separately because asyncpg prepared
+            # statements do not accept multiple semicolon-separated commands.
+            op.execute("ALTER TABLE stations ADD COLUMN IF NOT EXISTS cs_id VARCHAR(50);")
+            op.execute(
+                    "ALTER TABLE chargers ADD COLUMN IF NOT EXISTS cp_stat_raw VARCHAR(20), ADD COLUMN IF NOT EXISTS stat_update_datetime TIMESTAMP;"
+            )
 
 
 def downgrade() -> None:
