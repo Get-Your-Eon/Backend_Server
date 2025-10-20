@@ -690,16 +690,24 @@ class StationService:
                     derived_lat = lat_sum / coord_count
                     derived_lon = lon_sum / coord_count
                 else:
-                    derived_lat = detail.lat
-                    derived_lon = detail.lon
+                    # Do NOT reuse 'detail' coords when the station item is unrelated.
+                    derived_lat = 0.0
+                    derived_lon = 0.0
+
+                # Avoid returning an unrelated station name/address coming from the
+                # original 'item' (which may be a provider fallback). Only use
+                # derived_name/derived_address when they are present on chargers.
+                # Otherwise provide a neutral placeholder to avoid leaking wrong info.
+                safe_name = derived_name or f"Station {station_id}"
+                safe_address = derived_address or None
 
                 fallback_detail = StationDetail(
                     id=station_id,
-                    name=derived_name or detail.name or f"Station {station_id}",
-                    address=derived_address or detail.address,
+                    name=safe_name,
+                    address=safe_address,
                     lat=derived_lat,
                     lon=derived_lon,
-                    extra_info={**(detail.extra_info or {}), 'fallback_from_chargers': True},
+                    extra_info={**(detail.extra_info or {}), 'fallback_from_chargers': True, 'suppressed_unrelated_station_name': True},
                     chargers=[c.dict() if hasattr(c, 'dict') else c for c in matching_chargers],
                     charger_count=len(matching_chargers)
                 )
