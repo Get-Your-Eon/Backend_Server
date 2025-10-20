@@ -40,25 +40,49 @@ except Exception:
 
 
 async def fetch_page(client: httpx.AsyncClient, page: int, page_size: int = 100):
-    # This function uses the same /ws/chargePoint/curChargePoint endpoint pattern
-    cond = {
-        "pageNumber": page,
-        "pageSize": page_size,
-        "searchStatus": False
-    }
-    if API_KEY and AUTH_TYPE == "query":
-        # Kepco expects apiKey as query parameter name and returnType=json
-        params = {"apiKey": API_KEY, "returnType": "json"}
-    else:
-        params = None
+    # This function uses the same /ws/chargePoint/curChargePoint endpoint pattern.
+    # Some endpoints (like chargePoint/curChargePoint) only accept POST; try GET
+    # first and fall back to POST if we receive 405 Method Not Allowed.
     headers = {"Accept": "application/json"}
     if API_KEY and AUTH_TYPE == "header":
         headers["Authorization"] = API_KEY
 
-    # Kepco: use GET/POST to the EVchargeManage endpoint; prefer GET with params for discovery
-    resp = await client.get(f"{BASE_URL.rstrip('/')}", params=params, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    # Query params for GET (if using query auth)
+    params = None
+    if API_KEY and AUTH_TYPE == "query":
+        params = {"apiKey": API_KEY, "returnType": "json"}
+
+    url = BASE_URL.rstrip('/')
+
+    # Try GET first
+    try:
+        resp = await client.get(url, params=params, headers=headers, timeout=30)
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as e:
+        # If server says GET not allowed, try POST with JSON body
+        if e.response.status_code == 405:
+            body = {"pageNumber": page, "pageSize": page_size, "searchStatus": False}
+            if API_KEY:
+                # include API key and returnType in body for Kepco
+                if AUTH_TYPE == "query":
+                    body["apiKey"] = API_KEY
+                else:
+                    # header auth: keep header
+                    pass
+                body["returnType"] = "json"
+            try:
+                post_resp = await client.post(url, json=body, headers=headers, timeout=60)
+                post_resp.raise_for_status()
+                return post_resp.json()
+            except Exception:
+                # re-raise original for upstream handling
+                raise
+        # re-raise other HTTP errors
+        raise
+    except Exception:
+        # For network errors and others, re-raise to caller
+        raise
 
 
 async def main():
@@ -69,15 +93,33 @@ async def main():
         print("EXTERNAL_STATION_API_BASE_URL not set")
         return
 
-    engine = create_async_engine(ASYNC_DB, echo=False)
+    # Some environments put sslmode=require in the DATABASE_URL (libpq-style).
+    # asyncpg does not accept an 'sslmode' keyword; remove it from the URL and
+    # pass ssl via connect_args instead.
+    connect_args = None
+    async_db_url = ASYNC_DB
+    try:
+        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+
+        parsed = urlparse(ASYNC_DB)
+        qs = parse_qs(parsed.query, keep_blank_values=True)
+        if 'sslmode' in qs:
+            qs.pop('sslmode', None)
+            new_query = urlencode(qs, doseq=True)
+            async_db_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+            connect_args = {'ssl': True}
+    except Exception:
+        async_db_url = ASYNC_DB
+
+    engine = create_async_engine(async_db_url, echo=False, connect_args=connect_args or None)
     AsyncSessionLocal = sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
     async with httpx.AsyncClient() as client:
         page = 1
         page_size = 100
         total_fetched = 0
-    print(f"Starting seed: BASE_URL={BASE_URL}, SEED_MAX_PAGES={SEED_MAX_PAGES}")
-    while True:
+        print(f"Starting seed: BASE_URL={BASE_URL}, SEED_MAX_PAGES={SEED_MAX_PAGES}")
+        while True:
             # safety: stop if we've reached configured max pages
             if SEED_MAX_PAGES > 0 and page > SEED_MAX_PAGES:
                 print(f"Reached SEED_MAX_PAGES={SEED_MAX_PAGES}, stopping.")
@@ -110,13 +152,28 @@ async def main():
                 name = it.get('cpName') or it.get('cp_name') or ''
                 address = it.get('addr') or it.get('roadName') or ''
                 # charger list will be fetched later by separate call in upsert or here
+                # Build at least one charger object from the raw item so upsert
+                # will create chargers as well. Detailed connector types may not
+                # be available here; leave connector_types empty for now.
+                charger_list = []
+                if cpId:
+                    charger_list.append({
+                        "id": cpId,
+                        "charger_code": cpId,
+                        "type": it.get('cpTp') or it.get('ChargePointType') or None,
+                        "connector_types": [],
+                        "max_power_kw": None,
+                        "raw": it
+                    })
+
                 parsed.append({
                     "id": station_id,
                     "name": name,
                     "address": address,
                     "lat": lat,
                     "lon": lon,
-                    "raw": it
+                    "raw": it,
+                    "chargers": charger_list,
                 })
 
             async with AsyncSessionLocal() as session:
@@ -143,7 +200,7 @@ async def main():
             # rate limit modestly (use non-blocking sleep inside async loop)
             await asyncio.sleep(0.2)
 
-    print(f"Seeding finished. Total fetched: {total_fetched}")
+        print(f"Seeding finished. Total fetched: {total_fetched}")
     await engine.dispose()
 
 
