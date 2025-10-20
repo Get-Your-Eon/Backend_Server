@@ -82,6 +82,24 @@ def _extract_coords_from_raw(raw: Dict[str, Any]) -> Optional[tuple]:
     return (lat, lon)
 
 
+def _extract_station_info_from_charger_raw(raw: Dict[str, Any]) -> Dict[str, Optional[str]]:
+    """Try to extract station-level name/address hints from a charger raw payload."""
+    if not raw or not isinstance(raw, dict):
+        return {"name": None, "address": None}
+    name = raw.get('cpName') or raw.get('cp_name') or raw.get('station_name') or raw.get('cpNm') or raw.get('chargerSiteName')
+    # address can be under several keys depending on provider
+    address = raw.get('addr') or raw.get('address') or raw.get('roadName') or raw.get('siteAddr')
+    try:
+        name = str(name).strip() if name is not None else None
+    except Exception:
+        name = None
+    try:
+        address = str(address).strip() if address is not None else None
+    except Exception:
+        address = None
+    return {"name": name or None, "address": address or None}
+
+
 class StationService:
     """
     외부 충전소 API와 통신하는 서비스 계층입니다.
@@ -617,24 +635,79 @@ class StationService:
         )
 
         # If mismatch was detected or coords are missing, but we have charger records,
-        # prefer returning a charger-driven StationDetail so the client still gets charger specs.
+        # prefer returning a charger-driven StationDetail constructed only from chargers
+        # that match the requested cp_key / station_id. This avoids mixing station info
+        # from an unrelated fallback station returned by the provider.
         if (mismatch_detected or coords_missing) and chargers:
-            # Build a minimal station detail from charger info (no reliable coords)
-            fallback_detail = StationDetail(
-                id=station_id,
-                name=detail.name or f"Station {station_id}",
-                address=detail.address,
-                lat=detail.lat,
-                lon=detail.lon,
-                extra_info={**(detail.extra_info or {}), 'fallback_from_chargers': True},
-                chargers=[c.dict() if hasattr(c, 'dict') else c for c in chargers],
-                charger_count=charger_count_computed
-            )
-            try:
-                await set_cache(cache_key, fallback_detail.dict())
-            except Exception:
-                logger.debug("Failed to set cache for fallback %s", cache_key)
-            return fallback_detail
+            # Filter chargers to those that match the requested cp_key (by bid+cpId)
+            def charger_matches_requested(c: Any) -> bool:
+                try:
+                    raw = c.raw if hasattr(c, 'raw') else (c if isinstance(c, dict) else None)
+                    bid = (raw.get('bid') if raw and 'bid' in raw else (getattr(c, 'bid', None))) or ''
+                    cpId = (raw.get('cpId') or raw.get('cpid') if raw and ('cpId' in raw or 'cpid' in raw) else (getattr(c, 'cpId', None) or getattr(c, 'cpid', None))) or ''
+                    key = f"{bid}_{cpId}"
+                    # requested id in responses uses '{bid}_{cpId}' or station_id may be different formats
+                    if '_' in station_id:
+                        return key == station_id
+                    # if station_id is a 'P...' cp_key or similar, compare by cp_key suffix
+                    if station_id.startswith('P'):
+                        return (f"P{bid}{cpId}") == station_id
+                    return True
+                except Exception:
+                    return False
+
+            matching_chargers = [c for c in chargers if charger_matches_requested(c)]
+            if matching_chargers:
+                # derive station name/address from chargers if station item seems wrong
+                derived_name = None
+                derived_address = None
+                lat_sum = 0.0
+                lon_sum = 0.0
+                coord_count = 0
+                for c in matching_chargers:
+                    raw = c.raw if hasattr(c, 'raw') else (c if isinstance(c, dict) else None)
+                    if raw:
+                        info = _extract_station_info_from_charger_raw(raw)
+                        if not derived_name and info.get('name'):
+                            derived_name = info.get('name')
+                        if not derived_address and info.get('address'):
+                            derived_address = info.get('address')
+                        coords = _extract_coords_from_raw(raw)
+                        if coords:
+                            lat_sum += coords[0]
+                            lon_sum += coords[1]
+                            coord_count += 1
+                    # also check top-level fields on the ChargerDetail if provided as dict
+                    if isinstance(c, dict):
+                        maybe_name = c.get('cpName') or c.get('cp_name')
+                        maybe_addr = c.get('addr') or c.get('address')
+                        if not derived_name and maybe_name:
+                            derived_name = maybe_name
+                        if not derived_address and maybe_addr:
+                            derived_address = maybe_addr
+
+                if coord_count > 0:
+                    derived_lat = lat_sum / coord_count
+                    derived_lon = lon_sum / coord_count
+                else:
+                    derived_lat = detail.lat
+                    derived_lon = detail.lon
+
+                fallback_detail = StationDetail(
+                    id=station_id,
+                    name=derived_name or detail.name or f"Station {station_id}",
+                    address=derived_address or detail.address,
+                    lat=derived_lat,
+                    lon=derived_lon,
+                    extra_info={**(detail.extra_info or {}), 'fallback_from_chargers': True},
+                    chargers=[c.dict() if hasattr(c, 'dict') else c for c in matching_chargers],
+                    charger_count=len(matching_chargers)
+                )
+                try:
+                    await set_cache(cache_key, fallback_detail.dict())
+                except Exception:
+                    logger.debug("Failed to set cache for fallback %s", cache_key)
+                return fallback_detail
 
         # cache and return
         try:
