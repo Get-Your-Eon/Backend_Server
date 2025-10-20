@@ -506,14 +506,17 @@ class StationService:
                                     updated_at=c.get('updateDate'),
                                     raw=c
                                 ))
-                        # avoid referencing undefined extra_info here; use empty dict
+                        # avoid referencing undefined extra_info here; use neutral placeholders
+                        # Do NOT use item.get('cpName') because the 'item' may be an unrelated
+                        # provider fallback. Use a neutral station name and mark that we
+                        # suppressed an unrelated station name.
                         fallback_detail = StationDetail(
                             id=station_id,
-                            name=item.get('cpName') or f"Station {station_id}",
-                            address=item.get('addr') or None,
+                            name=f"Station {station_id}",
+                            address=None,
                             lat=0.0,
                             lon=0.0,
-                            extra_info={'fallback_from_chargers': True},
+                            extra_info={'fallback_from_chargers': True, 'suppressed_unrelated_station_name': True},
                             chargers=[c.dict() if hasattr(c, 'dict') else c for c in chargers]
                         )
                         try:
