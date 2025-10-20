@@ -143,10 +143,14 @@ async def run_migrations_online_async():
 
     print(f"[DEBUG] final ASYNC_DATABASE_URL: {async_db_url}")
 
+    # Avoid passing None for connect_args; SQLAlchemy expects a dict if provided.
+    create_kwargs = {"poolclass": pool.NullPool}
+    if connect_args:
+        create_kwargs["connect_args"] = connect_args
+
     connectable = create_async_engine(
         async_db_url,
-        poolclass=pool.NullPool,
-        connect_args=connect_args or None,
+        **create_kwargs,
     )
 
     async with connectable.begin() as conn:
