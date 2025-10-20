@@ -186,7 +186,8 @@ async def main():
                         "address": p["address"],
                         "lat": p["lat"],
                         "lon": p["lon"],
-                        "chargers": [],
+                        # preserve charger list parsed from the raw item
+                        "chargers": p.get("chargers", []),
                     }
                     to_upsert.append(st)
                 try:
