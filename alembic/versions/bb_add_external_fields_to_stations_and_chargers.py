@@ -18,16 +18,22 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     # stations: add external_bid, external_cp_id, raw_data(json), last_synced_at
-    op.add_column('stations', sa.Column('external_bid', sa.String(length=50), nullable=True))
-    op.add_column('stations', sa.Column('external_cp_id', sa.String(length=50), nullable=True))
-    op.add_column('stations', sa.Column('raw_data', sa.JSON(), nullable=True))
-    op.add_column('stations', sa.Column('last_synced_at', sa.DateTime(), nullable=True))
+        op.execute("""
+        ALTER TABLE stations
+            ADD COLUMN IF NOT EXISTS external_bid VARCHAR(50),
+            ADD COLUMN IF NOT EXISTS external_cp_id VARCHAR(50),
+            ADD COLUMN IF NOT EXISTS raw_data JSON,
+            ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMP;
+        """)
 
     # chargers: add external_charger_id, manufacturer, model, connector_types(json)
-    op.add_column('chargers', sa.Column('external_charger_id', sa.String(length=50), nullable=True))
-    op.add_column('chargers', sa.Column('manufacturer', sa.String(length=100), nullable=True))
-    op.add_column('chargers', sa.Column('model', sa.String(length=100), nullable=True))
-    op.add_column('chargers', sa.Column('connector_types', sa.JSON(), nullable=True))
+        op.execute("""
+        ALTER TABLE chargers
+            ADD COLUMN IF NOT EXISTS external_charger_id VARCHAR(50),
+            ADD COLUMN IF NOT EXISTS manufacturer VARCHAR(100),
+            ADD COLUMN IF NOT EXISTS model VARCHAR(100),
+            ADD COLUMN IF NOT EXISTS connector_types JSON;
+        """)
 
 
 def downgrade() -> None:

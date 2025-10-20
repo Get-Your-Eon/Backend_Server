@@ -122,9 +122,31 @@ async def run_migrations_online_async():
 
     from sqlalchemy.ext.asyncio import create_async_engine
 
+    # asyncpg.connect does not accept an 'sslmode' keyword argument.
+    # If the URL contains sslmode=<...> (commonly added for libpq tools),
+    # remove it from the URL and instruct asyncpg to use SSL via connect_args.
+    connect_args = {}
+    if async_db_url and "sslmode=" in async_db_url:
+        import urllib.parse as _urlparse
+
+        parsed = _urlparse.urlparse(async_db_url)
+        qs = _urlparse.parse_qs(parsed.query, keep_blank_values=True)
+        if "sslmode" in qs:
+            qs.pop("sslmode", None)
+            new_query = _urlparse.urlencode(qs, doseq=True)
+            async_db_url = _urlparse.urlunparse(
+                (parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment)
+            )
+            # Ask asyncpg to use SSL. asyncpg expects 'ssl' (bool or SSLContext),
+            # not 'sslmode'. Using True will create a default SSLContext internally.
+            connect_args["ssl"] = True
+
+    print(f"[DEBUG] final ASYNC_DATABASE_URL: {async_db_url}")
+
     connectable = create_async_engine(
         async_db_url,
         poolclass=pool.NullPool,
+        connect_args=connect_args or None,
     )
 
     async with connectable.begin() as conn:
