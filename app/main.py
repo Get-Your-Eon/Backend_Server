@@ -202,6 +202,44 @@ async def subsidy_lookup(manufacturer: str, model_group: str, db: AsyncSession =
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/subsidy/by", tags=["Subsidy"], summary="Lookup subsidies (camelCase) by manufacturer and modelGroup")
+async def subsidy_lookup_camel(manufacturer: str, modelGroup: str, db: AsyncSession = Depends(get_async_session), _ok: bool = Depends(frontend_api_key_required)):
+    """Compatibility wrapper: accept camelCase `modelGroup` from frontend and return subsidy rows.
+
+    Header: x-api-key: <key>
+    Query params: manufacturer, modelGroup
+    """
+    # reuse same logic as /subsidy but accept modelGroup camelCase
+    model_group = modelGroup
+    try:
+        query_sql = (
+            "SELECT model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won "
+            "FROM subsidies "
+            "WHERE manufacturer = :manufacturer AND model_group = :model_group "
+            "ORDER BY model_name LIMIT 100"
+        )
+        ensure_read_only_sql(query_sql)
+        result = await db.execute(text(query_sql), {"manufacturer": manufacturer, "model_group": model_group})
+        rows = result.fetchall()
+
+        mapped = []
+        for r in rows:
+            m = r._mapping
+            nat = m.get("subsidy_national_10k_won")
+            loc = m.get("subsidy_local_10k_won")
+            tot = m.get("subsidy_total_10k_won")
+            mapped.append({
+                "model_name": m.get("model_name"),
+                "subsidy_national": int(nat) if nat is not None else None,
+                "subsidy_local": int(loc) if loc is not None else None,
+                "subsidy_total": int(tot) if tot is not None else None,
+            })
+
+        return JSONResponse(status_code=200, content=mapped)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # --- V1 API 라우터 포함 (일반 사용자 접근 가능) ---
 app.include_router(api_router, prefix="/api/v1")
 
