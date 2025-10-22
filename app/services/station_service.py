@@ -679,11 +679,19 @@ class StationService:
             cpId = station_id
         cp_key = f"P{bid}{cpId}"
 
-        cond = {"cpKeyList": [cp_key], "searchStatus": False}
-        station_payload = await self._post('/ws/chargePoint/curChargePoint', json=cond)
-        charger_payload = await self._post('/ws/charger/curCharger', json={"cpKeyList": [cp_key]})
-
-        return {"cp_key": cp_key, "station_payload": station_payload, "charger_payload": charger_payload}
+        # Use KEPCO adapter instead of legacy API calls
+        try:
+            station_data = await self.kepco.get_station_by_csId(station_id)
+            charger_data = await self.kepco.find_chargers([station_id, cpId])
+            
+            return {
+                "cp_key": cp_key, 
+                "station_payload": [station_data] if station_data else [],
+                "charger_payload": charger_data
+            }
+        except Exception as e:
+            logger.error(f"Failed to get raw charger payload for {station_id}: {e}")
+            return {"cp_key": cp_key, "station_payload": [], "charger_payload": []}
 
 
 station_service = StationService()
