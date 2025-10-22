@@ -41,7 +41,15 @@ class Settings(BaseSettings):
     CACHE_EXPIRE_SECONDS: int = 300
 
     # --------------------------
-    # 외부 충전소 API 설정
+    # KEPCO API 설정 (기존 EXTERNAL_STATION_API 환경변수 활용)
+    # --------------------------
+    # KEPCO API Key는 기존 EXTERNAL_STATION_API_KEY 환경변수 사용
+    @property
+    def KEPCO_API_KEY(self) -> Optional[str]:
+        return self.EXTERNAL_STATION_API_KEY
+    
+    # --------------------------
+    # 외부 충전소 API 설정 (Legacy)
     # --------------------------
     # 외부 충전소 API의 기본 URL (예: https://api.example.com)
     EXTERNAL_STATION_API_BASE_URL: Optional[str] = None

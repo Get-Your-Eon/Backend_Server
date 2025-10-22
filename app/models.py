@@ -35,10 +35,17 @@ class Station(Base):
     # raw JSON from upstream provider for debugging / future fields
     raw_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     provider: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-    # Kepco specific station id (csId)
-    cs_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # KEPCO specific fields
+    cs_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, unique=True, index=True)  # KEPCO station ID
+    cs_nm: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # KEPCO station name
+    addr: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)  # KEPCO address for caching
+    lat: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # KEPCO latitude as string
+    longi: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # KEPCO longitude as string
     location = Column(Geometry(geometry_type='POINT', srid=4326), index=True)
     last_synced_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    # Track when static/dynamic data was last updated
+    static_data_updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
+    dynamic_data_updated_at: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime, nullable=True)
 
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
@@ -73,6 +80,14 @@ class Charger(Base):
     connector_types: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     output_kw: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     status_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # KEPCO specific fields
+    cp_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, unique=True, index=True)  # KEPCO charger ID
+    cp_nm: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)  # KEPCO charger name
+    charge_tp: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # 1:완속, 2:급속
+    cp_tp: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # 충전방식 코드
+    cp_stat: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, index=True)  # 충전기 상태코드 (dynamic)
+    kepco_stat_update_datetime: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # KEPCO format datetime
+    cs_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)  # Parent station KEPCO ID
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 

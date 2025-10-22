@@ -1,112 +1,50 @@
-from pydantic import BaseModel, Field, conint
+"""Pydantic schemas for Station API"""
+
 from typing import List, Optional
+from pydantic import BaseModel, Field
 
 
-class ChargerBasic(BaseModel):
-    id: str
-    connector_types: List[str]
-    # max power in kilowatts
-    max_power_kw: Optional[float] = None
-    status: Optional[str] = None
-    manufacturer: Optional[str] = None
-    model: Optional[str] = None
-    # additional fields observed in external API
-    bid: Optional[str] = None
-    cpId: Optional[str] = None
-    charger_code: Optional[str] = None  # csId
-    cs_cat_code: Optional[str] = None
-    info_coll_date: Optional[str] = None
-    status_code: Optional[int] = None
-    ch_start_date: Optional[str] = None
-    last_ch_start_date: Optional[str] = None
-    last_ch_end_date: Optional[str] = None
-    updated_at: Optional[str] = None
-    raw: Optional[dict] = None
+class StationSearchRequest(BaseModel):
+    """Request schema for station search by location"""
+    lat: float = Field(..., description="User latitude", ge=-90, le=90)
+    lon: float = Field(..., description="User longitude", ge=-180, le=180)
+    radius: int = Field(1000, description="Search radius in meters", ge=100, le=10000)
 
 
 class StationSummary(BaseModel):
-    id: str
-    name: str
-    address: Optional[str]
-    lat: float
-    lon: float
-    distance_m: Optional[int] = None
-    charger_count: Optional[int] = None
-
-
-class StationDetail(StationSummary):
-    extra_info: Optional[dict] = None
-    chargers: Optional[List[ChargerBasic]] = []
-
-
-class StationListResponse(BaseModel):
-    data: List[StationSummary]
+    """Station summary for map display"""
+    cs_id: str = Field(..., description="KEPCO station ID")
+    addr: str = Field(..., description="Station address")
+    cs_nm: str = Field(..., description="Station name")
+    lat: str = Field(..., description="Latitude as string")
+    longi: str = Field(..., description="Longitude as string")
 
 
 class ChargerDetail(BaseModel):
-    id: str
-    station_id: Optional[str]
-    connector_types: List[str]
-    # max power in kilowatts
-    max_power_kw: Optional[float] = None
-    status: Optional[str] = None
-    manufacturer: Optional[str] = None
-    model: Optional[str] = None
-    # additional raw fields
-    bid: Optional[str] = None
-    cpId: Optional[str] = None
-    charger_code: Optional[str] = None
-    cs_cat_code: Optional[str] = None
-    info_coll_date: Optional[str] = None
-    status_code: Optional[int] = None
-    ch_start_date: Optional[str] = None
-    last_ch_start_date: Optional[str] = None
-    last_ch_end_date: Optional[str] = None
-    updated_at: Optional[str] = None
-    raw: Optional[dict] = None
-# app/schemas/station.py
-from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime
+    """Detailed charger information"""
+    cp_id: str = Field(..., description="KEPCO charger ID")
+    cp_nm: str = Field(..., description="Charger name")
+    charge_tp: Optional[str] = Field(None, description="Charge type: 1=완속, 2=급속")
+    cp_tp: Optional[str] = Field(None, description="Connector type code")
+    cp_stat: Optional[str] = Field(None, description="Status code: 1=충전가능, 2=충전중, 3=고장/점검, 4=통신장애, 5=통신미연결")
+    charge_method: Optional[str] = Field(None, description="Human readable charging method")
+    status_text: str = Field(..., description="Human readable status")
 
-# -----------------------------------
-# 1. 충전소 단일 객체 응답용 모델
-# -----------------------------------
-class StationPublic(BaseModel):
-    id: int  # DB PK
-    station_code: str
-    name: str
-    address: Optional[str]
-    provider: Optional[str]
-    latitude: Optional[float]
-    longitude: Optional[float]
-    created_at: Optional[datetime]
-    updated_at: Optional[datetime]
 
-# -----------------------------------
-# 2. 충전소 리스트 응답 Wrapper
-# -----------------------------------
-class StationListResponse(BaseModel):
-    stations: List[StationPublic]
+class StationDetail(BaseModel):
+    """Detailed station information with chargers"""
+    cs_nm: str = Field(..., description="Station name")
+    available_methods: str = Field(..., description="Available charging methods")
+    chargers: List[ChargerDetail] = Field(..., description="List of chargers at this station")
 
-# -----------------------------------
-# 3. 충전기 상태 단일 객체 모델
-# -----------------------------------
-class ChargerBase(BaseModel):
-    charger_id: int
-    charger_type: Optional[str]
-    output_kw: Optional[float]
-    connector_type: Optional[str]
-    status_code: Optional[int]
 
-# -----------------------------------
-# 4. 충전기 상태 업데이트 요청 모델
-# -----------------------------------
-class ChargerStatusUpdate(BaseModel):
-    new_status_code: int
+class ChargerRequest(BaseModel):
+    """Request schema for charger details"""
+    cs_id: str = Field(..., description="KEPCO station ID")
+    addr: str = Field(..., description="Station address")
 
-# -----------------------------------
-# 5. 충전기 리스트 응답 Wrapper
-# -----------------------------------
-class ChargerListResponse(BaseModel):
-    chargers: List[ChargerBase]
+
+class ErrorResponse(BaseModel):
+    """Error response schema"""
+    error: str = Field(..., description="Error message")
+    detail: Optional[str] = Field(None, description="Error details")

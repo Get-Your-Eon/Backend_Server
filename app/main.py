@@ -253,79 +253,7 @@ async def admin_data():
 app.include_router(admin_router, prefix="/admin")
 
 
-# Temporary endpoint: allow frontend API key holders to delete station detail cache keys
-@app.post("/admin/cache-unlocked")
-async def delete_station_cache_unlocked(payload: dict = Body(...), _ok: bool = Depends(frontend_api_key_required)):
-    key = payload.get("key")
-    if not key or not key.startswith("station:detail:"):
-        raise HTTPException(status_code=400, detail="Only station detail keys are allowed")
-    redis_client = await get_redis_client()
-    if not redis_client:
-        raise HTTPException(status_code=503, detail="Redis not available")
-    try:
-        deleted = await redis_client.delete(key)
-        return {"deleted": bool(deleted), "key": key}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-
-# Temporary DB inspect endpoint (read-only) — returns ST_AsText(location) for given station id
-@app.get("/api/v1/admin/db-inspect/station/{station_id}")
-async def db_inspect_station(station_id: str, db: AsyncSession = Depends(get_async_session), _ok: bool = Depends(frontend_api_key_required)):
-    try:
-        # Allow lookup by station_code (string external id) or by numeric PK (id::text)
-        q = text(
-            "SELECT id, station_code, ST_AsText(location) as location_text "
-            "FROM stations "
-            "WHERE station_code = :id OR id::text = :id "
-            "LIMIT 1"
-        )
-        result = await db.execute(q, {"id": station_id})
-        row = result.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="station not found")
-        m = row._mapping
-        return {"id": m.get("id"), "station_code": m.get("station_code"), "location_text": m.get("location_text")}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# Temporary top-level admin endpoint to set station location directly (quick fallback)
-@app.post("/admin/set-location")
-async def main_set_location(payload: dict = Body(...), x_admin_key: Optional[str] = Header(None), db: AsyncSession = Depends(get_async_session)):
-    """Quick admin endpoint to set stations.location when admin router isn't available in the deployed build.
-
-    Body: { "station_id": "CG_CGH00140", "lat": 37.123, "lon": 127.456 }
-    Header: x-admin-key: <ADMIN_API_KEY>
-    """
-    if not settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Admin API not configured")
-    if x_admin_key != settings.ADMIN_API_KEY:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid admin key")
-
-    station_id = payload.get("station_id")
-    lat = payload.get("lat")
-    lon = payload.get("lon")
-    if not station_id or lat is None or lon is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="station_id, lat and lon are required in body")
-
-    try:
-        q = text(
-            "UPDATE stations SET location = ST_SetSRID(ST_MakePoint(:lon, :lat),4326), updated_at = now() "
-            "WHERE station_code = :id OR id::text = :id "
-            "RETURNING id, station_code, ST_AsText(location) as location_text"
-        )
-        result = await db.execute(q, {"lon": lon, "lat": lat, "id": station_id})
-        row = result.fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="station not found")
-        await db.commit()
-        m = row._mapping
-        return {"id": m.get("id"), "station_code": m.get("station_code"), "location_text": m.get("location_text")}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 # --- DB 연결 테스트 / 간단 조회 엔드포인트 ---
 @app.get("/db-test", tags=["Infrastructure"], summary="DB 연결 및 보조금(subsidy) 조회 테스트")
