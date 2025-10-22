@@ -28,7 +28,7 @@ echo "Push complete. Render will start a deploy based on the pushed commit."
 echo "Next steps to check deploy status:"
 echo "  - Open Render dashboard for your service and review the Deploy/Logs tab."
 echo "  - If you have Render CLI installed, you can tail logs (replace <service> with your service name):"
-echo "      render services logs <service> --tail"
+echo "      render PGPASSWORD='...' psql "host=... port=5432 dbname=... user=... sslmode=require" -c "SELECT id, station_code, ST_AsText(location) FROM stations WHERE location IS NOT NULL ORDER BY id DESC LIMIT 20;"services logs <service> --tail"
 echo "  - Or fetch recent events in the dashboard and paste logs here for analysis."
 
 echo "If you want this script to automatically tail logs using the Render CLI, set RENDER_SERVICE_NAME env var and ensure 'render' CLI is installed."
