@@ -49,9 +49,9 @@ class Settings(BaseSettings):
         return self.EXTERNAL_STATION_API_KEY
     
     # --------------------------
-    # 외부 충전소 API 설정 (Legacy)
+    # 외부 충전소 API 설정 (Legacy/KEPCO)
     # --------------------------
-    # 외부 충전소 API의 기본 URL (예: https://api.example.com)
+    # 외부 충전소 API의 기본 URL (예: https://bigdata.kepco.co.kr/openapi/v1/EVchargeManage.do)
     EXTERNAL_STATION_API_BASE_URL: Optional[str] = None
     # API Key (Render에서는 Secret으로 저장)
     EXTERNAL_STATION_API_KEY: Optional[str] = None
