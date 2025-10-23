@@ -248,7 +248,8 @@ async def search_stations_direct(
     radius: int = Query(..., description="Search radius in meters (required)", ge=100, le=10000),
     page: int = Query(1, description="Page number", ge=1),
     limit: int = Query(20, description="Results per page", ge=1, le=100),
-    _: bool = Depends(frontend_api_key_required)
+    _: bool = Depends(frontend_api_key_required),
+    db: AsyncSession = Depends(get_async_session)
 ):
     """
     Search for EV charging stations within specified radius.
@@ -263,21 +264,66 @@ async def search_stations_direct(
     - page: Page number (default: 1)
     - limit: Results per page (default: 20)
     """
-    return {
-        "message": "Station search endpoint is ready (DIRECT v3)",
-        "status": "active_direct",
-        "timestamp": "2025-10-23T14:30:00Z",
-        "required_params_received": {
+    try:
+        offset = (page - 1) * limit
+        
+        # PostGIS를 사용한 위치 기반 쿼리 (KEPCO API 호출 없음)
+        query_sql = """
+        SELECT
+          COALESCE(station_code, id::text) AS id,
+          name,
+          address,
+          ST_Y(location::geometry) AS lat,
+          ST_X(location::geometry) AS lon,
+          ST_Distance(location::geography, ST_SetSRID(ST_MakePoint(:lon, :lat),4326)::geography) AS distance_m,
+          (SELECT COUNT(1) FROM chargers c WHERE c.station_id = stations.id) AS charger_count
+        FROM stations
+        WHERE location IS NOT NULL
+          AND ST_DWithin(location::geography, ST_SetSRID(ST_MakePoint(:lon, :lat),4326)::geography, :radius)
+        ORDER BY distance_m
+        LIMIT :limit OFFSET :offset
+        """
+        
+        result = await db.execute(text(query_sql), {
             "lat": lat,
-            "lon": lon, 
-            "radius": radius
-        },
-        "optional_params": {
-            "page": page,
-            "limit": limit
-        },
-        "note": "Station functionality completely isolated from subsidy features"
-    }
+            "lon": lon,
+            "radius": radius,
+            "limit": limit,
+            "offset": offset
+        })
+        
+        stations = []
+        for row in result.fetchall():
+            r = row._mapping
+            stations.append({
+                "id": r["id"],
+                "name": r["name"], 
+                "address": r["address"],
+                "lat": float(r["lat"]) if r["lat"] else None,
+                "lon": float(r["lon"]) if r["lon"] else None,
+                "distance_m": int(r["distance_m"]) if r["distance_m"] else None,
+                "charger_count": r["charger_count"]
+            })
+        
+        return {
+            "message": "Station search completed successfully",
+            "status": "success",
+            "count": len(stations),
+            "stations": stations,
+            "query_params": {
+                "lat": lat,
+                "lon": lon, 
+                "radius": radius,
+                "page": page,
+                "limit": limit
+            }
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database query failed: {str(e)}"
+        )
 
 # --- V1 API 라우터 포함 (일반 사용자 접근 가능) ---
 app.include_router(api_router, prefix="/api/v1")
