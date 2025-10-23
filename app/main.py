@@ -409,15 +409,15 @@ async def search_stations_direct(
         if not kepco_url or not kepco_api_key:
             raise HTTPException(status_code=500, detail="KEPCO API configuration missing")
         
+        # 새로운 API 문서에 따른 GET 요청 (쿼리 파라미터 방식)
         async with httpx.AsyncClient() as client:
-            response = await client.post(
+            response = await client.get(
                 kepco_url,
-                json={
+                params={
                     "addr": addr,
-                    "api_key": kepco_api_key,
+                    "apiKey": kepco_api_key,  # API 문서에서 'apiKey' 사용
                     "returnType": "json"
                 },
-                headers={"Content-Type": "application/json"},
                 timeout=30.0
             )
             
@@ -426,11 +426,12 @@ async def search_stations_direct(
             
             kepco_data = response.json()
             
-            # 7. KEPCO 데이터 처리 및 DB 저장
+            # 7. KEPCO 데이터 처리 및 DB 저장 (API 문서 필드명에 맞게 수정)
             api_stations = []
             if "data" in kepco_data and kepco_data["data"]:
                 for item in kepco_data["data"]:
                     try:
+                        # API 문서 필드명: lat, longi
                         item_lat = float(item.get("lat", 0))
                         item_lon = float(item.get("longi", 0))
                         
@@ -441,17 +442,24 @@ async def search_stations_direct(
                         
                         if distance <= actual_radius:
                             station_data = {
-                                "id": item.get("csId", ""),
-                                "name": item.get("csNm", ""),
-                                "address": item.get("addr", ""),
+                                "id": item.get("csId", ""),           # 충전소ID
+                                "name": item.get("csNm", ""),         # 충전소명칭  
+                                "address": item.get("addr", ""),      # 충전기주소
                                 "lat": item_lat,
                                 "lon": item_lon,
                                 "distance_m": int(distance),
-                                "charger_count": 1
+                                "charger_count": 1,
+                                # 추가 충전기 정보
+                                "charger_id": item.get("cpId", ""),   # 충전기ID
+                                "charger_name": item.get("cpNm", ""), # 충전기명칭
+                                "charger_status": item.get("cpStat", ""), # 충전기상태코드
+                                "charge_type": item.get("chargeTp", ""), # 충전기타입
+                                "connector_type": item.get("cpTp", ""),  # 충전방식
+                                "status_update_time": item.get("statUpdateDatetime", "") # 상태갱신시각
                             }
                             api_stations.append(station_data)
                             
-                            # DB에 저장 (upsert)
+                            # DB에 저장 (upsert) - 정적 + 동적 데이터
                             upsert_query = text("""
                                 INSERT INTO stations (cs_id, cs_nm, addr, lat, longi, location, created_at, updated_at)
                                 VALUES (:cs_id, :cs_nm, :addr, :lat, :longi, 
@@ -467,10 +475,35 @@ async def search_stations_direct(
                             
                             await db.execute(upsert_query, {
                                 "cs_id": item.get("csId"),
-                                "cs_nm": item.get("csNm"),
+                                "cs_nm": item.get("csNm"), 
                                 "addr": item.get("addr"),
                                 "lat": str(item_lat),
                                 "longi": str(item_lon)
+                            })
+                            
+                            # 충전기 데이터도 저장
+                            charger_upsert = text("""
+                                INSERT INTO chargers (cp_id, cp_nm, cp_stat, charge_tp, cp_tp, 
+                                                    kepco_stat_update_datetime, cs_id, created_at, updated_at)
+                                VALUES (:cp_id, :cp_nm, :cp_stat, :charge_tp, :cp_tp, 
+                                        :stat_update_time, :cs_id, NOW(), NOW())
+                                ON CONFLICT (cp_id) DO UPDATE SET
+                                    cp_nm = EXCLUDED.cp_nm,
+                                    cp_stat = EXCLUDED.cp_stat,
+                                    charge_tp = EXCLUDED.charge_tp,
+                                    cp_tp = EXCLUDED.cp_tp,
+                                    kepco_stat_update_datetime = EXCLUDED.kepco_stat_update_datetime,
+                                    updated_at = NOW()
+                            """)
+                            
+                            await db.execute(charger_upsert, {
+                                "cp_id": item.get("cpId"),
+                                "cp_nm": item.get("cpNm"),
+                                "cp_stat": item.get("cpStat"),
+                                "charge_tp": item.get("chargeTp"),
+                                "cp_tp": item.get("cpTp"),
+                                "stat_update_time": item.get("statUpdateDatetime"),
+                                "cs_id": item.get("csId")
                             })
                             
                     except (ValueError, TypeError, Exception):
