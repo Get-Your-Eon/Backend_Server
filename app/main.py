@@ -258,37 +258,26 @@ async def search_ev_stations_new_test(
         "received_params": {"lat": lat, "lon": lon, "radius": radius}
     }
 
-@app.get("/api/v1/stations", tags=["Station"], summary="Search EV charging stations and chargers")
-async def search_ev_stations(
-    lat: float = Query(..., description="Latitude coordinate (required from frontend)"),
-    lon: float = Query(..., description="Longitude coordinate (required from frontend)"), 
-    radius: int = Query(..., description="Search radius in meters (required from frontend)", ge=100, le=10000),
-    page: int = Query(1, description="Page number", ge=1),
-    limit: int = Query(20, description="Results per page", ge=1, le=100),
-    _: bool = Depends(frontend_api_key_required),
+@app.get("/api/v1/stations", tags=["Station"], summary="🚀 KEPCO 2025 API - BRAND NEW")
+async def kepco_2025_new_api_implementation(
+    lat: float = Query(..., description="위도 좌표", ge=-90, le=90),
+    lon: float = Query(..., description="경도 좌표", ge=-180, le=180), 
+    radius: int = Query(..., description="검색 반경(미터) - 필수", ge=100, le=10000),
+    page: int = Query(1, description="페이지 번호", ge=1),
+    limit: int = Query(20, description="페이지당 결과 수", ge=1, le=100),
+    api_key: str = Depends(frontend_api_key_required),
     db: AsyncSession = Depends(get_async_session),
     redis_client: Redis = Depends(get_redis_client)
 ):
     """
-    EV 충전소/충전기 검색 API (보조금 조회와 완전 분리)
-    
-    프론트엔드 요청: 위도, 경도, 반경(meter)
-    백엔드 응답: KEPCO API 데이터 전달
-    
-    3단계 캐싱 전략:
-    1. Redis 캐시 조회 → 있으면 바로 반환
-    2. DB 정적 데이터 조회 → 있으면 캐시 저장 후 반환  
-    3. KEPCO API 호출 → DB & 캐시 저장 후 반환
-    
-    반경 기준값: 500, 1000, 3000, 5000, 10000 (요청값을 올림)
+    🚀 KEPCO 2025 API - 완전히 새로운 구현
+    이전 URL: /ws/chargePoint/curChargePoint (삭제됨)
+    새 URL: /EVchargeManage.do (정확함)
     """
-    # 🚨 CRITICAL DEBUG: 새 코드 실행 확인용 로그
-    print(f"🔥🔥🔥 ABSOLUTELY NEW CODE VERSION 2025-10-24-02:18 🔥🔥🔥")
-    print(f"🔥 NEW CODE EXECUTING - search_ev_stations called with lat={lat}, lon={lon}, radius={radius}")
-    print(f"🔥 TIMESTAMP: {datetime.now()}")
-    print(f"🔥 This should appear in Render logs if new code is running!")
-    print(f"🔥 Expected URL: https://bigdata.kepco.co.kr/openapi/v1/EVchargeManage.do")
-    print(f"🔥 NOT: /ws/chargePoint/curChargePoint (old version)")
+    print(f"��� KEPCO 2025 COMPLETELY NEW CODE ���")
+    print(f"� Function: kepco_2025_new_api_implementation")
+    print(f"� Time: {datetime.now()}")
+    print(f"� Params: lat={lat}, lon={lon}, radius={radius}")
     
     try:
         from app.core.config import settings
