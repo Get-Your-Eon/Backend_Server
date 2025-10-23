@@ -240,12 +240,12 @@ async def subsidy_lookup_camel(manufacturer: str, modelGroup: str, db: AsyncSess
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- 충전소 검색 엔드포인트 (보조금 기능과 독립) ---
-@app.get("/api/v1/stations", tags=["Station"], summary="Search charging stations by location")
-async def search_stations_direct(
-    lat: float = Query(..., description="Latitude coordinate (required)"),
-    lon: float = Query(..., description="Longitude coordinate (required)"), 
-    radius: int = Query(..., description="Search radius in meters (required)", ge=100, le=10000),
+# --- 충전소/충전기 검색 엔드포인트 (보조금 기능과 완전 독립) ---
+@app.get("/api/v1/stations", tags=["Station"], summary="Search EV charging stations and chargers")
+async def search_ev_stations(
+    lat: float = Query(..., description="Latitude coordinate (required from frontend)"),
+    lon: float = Query(..., description="Longitude coordinate (required from frontend)"), 
+    radius: int = Query(..., description="Search radius in meters (required from frontend)", ge=100, le=10000),
     page: int = Query(1, description="Page number", ge=1),
     limit: int = Query(20, description="Results per page", ge=1, le=100),
     _: bool = Depends(frontend_api_key_required),
@@ -253,18 +253,17 @@ async def search_stations_direct(
     redis_client: Redis = Depends(get_redis_client)
 ):
     """
-    Search for EV charging stations within specified radius.
+    EV 충전소/충전기 검색 API (보조금 조회와 완전 분리)
     
-    3-tier caching strategy:
-    1. Cache lookup → return if found
-    2. DB lookup (static data only) → return if found 
-    3. KEPCO API call → save to DB & cache → return
+    프론트엔드 요청: 위도, 경도, 반경(meter)
+    백엔드 응답: KEPCO API 데이터 전달
     
-    Required parameters:
-    - lat: Latitude coordinate (프론트엔드에서 필수 제공)
-    - lon: Longitude coordinate (프론트엔드에서 필수 제공) 
-    - radius: Search radius in meters (프론트엔드에서 필수 제공)
-    - x-api-key: API key in header
+    3단계 캐싱 전략:
+    1. Redis 캐시 조회 → 있으면 바로 반환
+    2. DB 정적 데이터 조회 → 있으면 캐시 저장 후 반환  
+    3. KEPCO API 호출 → DB & 캐시 저장 후 반환
+    
+    반경 기준값: 500, 1000, 3000, 5000, 10000 (요청값을 올림)
     """
     try:
         import httpx
@@ -272,30 +271,21 @@ async def search_stations_direct(
         from app.core.config import settings
         from app.redis_client import get_cache, set_cache
         
-        # 헬퍼 함수 정의
+        # === 헬퍼 함수들 ===
         def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-            """두 지점 간의 거리를 미터 단위로 계산"""
-            R = 6371000  # 지구 반지름 (미터)
-            lat1_rad = math.radians(lat1)
-            lat2_rad = math.radians(lat2)
-            delta_lat = math.radians(lat2 - lat1)
-            delta_lon = math.radians(lon2 - lon1)
+            """거리 계산 (하버사인 공식)"""
+            R = 6371000  # 지구 반지름(미터)
+            lat1_rad, lat2_rad = math.radians(lat1), math.radians(lat2)
+            delta_lat, delta_lon = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
             
-            a = (math.sin(delta_lat/2) * math.sin(delta_lat/2) +
-                 math.cos(lat1_rad) * math.cos(lat2_rad) *
-                 math.sin(delta_lon/2) * math.sin(delta_lon/2))
+            a = (math.sin(delta_lat/2)**2 + 
+                 math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(delta_lon/2)**2)
             c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
             return R * c
-        
-        # 1. 반경 기준값 매핑 (요청값을 기준값으로 올림)
-        radius_thresholds = [500, 1000, 3000, 5000, 10000]
-        actual_radius = next((r for r in radius_thresholds if radius <= r), 10000)
-        
-        # 2. 위도/경도를 주소(addr)로 변환
-        async def get_address_from_coords(lat: float, lon: float) -> str:
-            """위도/경도를 시/군/구/동 주소로 변환"""
+
+        async def coordinates_to_address(lat: float, lon: float) -> str:
+            """위도/경도 → 한국 주소 변환 (KEPCO API addr 파라미터용)"""
             try:
-                # Nominatim (OpenStreetMap) 역지오코딩 사용
                 async with httpx.AsyncClient() as client:
                     response = await client.get(
                         "https://nominatim.openstreetmap.org/reverse",
@@ -303,230 +293,241 @@ async def search_stations_direct(
                             "format": "json",
                             "lat": lat,
                             "lon": lon,
-                            "accept-language": "ko"
+                            "accept-language": "ko",
+                            "addressdetails": 1
                         },
-                        headers={"User-Agent": "EV-Charger-Search/1.0"},
+                        headers={"User-Agent": "EV-Station-Search/1.0"},
                         timeout=10.0
                     )
                     
                     if response.status_code == 200:
                         data = response.json()
-                        address_parts = data.get("address", {})
+                        addr = data.get("address", {})
                         
-                        # 시/군/구/동 조합
-                        city = address_parts.get("city", "")
-                        county = address_parts.get("county", "")
-                        district = address_parts.get("district", "")
-                        neighbourhood = address_parts.get("neighbourhood", "")
+                        # 한국 주소 형식으로 조합
+                        parts = []
+                        for key in ["state", "city", "county", "district", "neighbourhood"]:
+                            if addr.get(key):
+                                parts.append(addr[key])
                         
-                        addr_parts = [p for p in [city, county, district, neighbourhood] if p]
-                        return " ".join(addr_parts) if addr_parts else "서울특별시 강남구"
-                    
-            except Exception:
+                        if parts:
+                            return " ".join(parts)
+            except:
                 pass
             
-            # 기본값 (지오코딩 실패 시)
-            return "서울특별시 강남구"
+            return "서울특별시 강남구"  # 기본값
+
+        # === 1. 반경 기준값 매핑 ===
+        radius_levels = [500, 1000, 3000, 5000, 10000]
+        mapped_radius = next((r for r in radius_levels if radius <= r), 10000)
         
-        addr = await get_address_from_coords(lat, lon)
+        # === 2. 좌표 → 주소 변환 ===
+        search_addr = await coordinates_to_address(lat, lon)
         
-        # 3. 캐시 키 생성
-        cache_key = f"stations:{addr}:{actual_radius}"
+        # === 3. 캐시 키 생성 ===
+        cache_key = f"ev_stations:{search_addr}:{mapped_radius}:v2"
         
-        # 4. (1단계) 캐시 조회
-        cached_data = await get_cache(cache_key)
-        if cached_data:
+        # === 4. [1단계] 캐시 조회 ===
+        cached = await get_cache(cache_key)
+        if cached and "stations" in cached:
             return {
-                "message": "Data from cache",
+                "message": "충전소 데이터 (캐시에서 조회)",
                 "status": "cache_hit",
-                "count": len(cached_data.get("stations", [])),
-                "stations": cached_data.get("stations", []),
-                "source": "cache",
-                "addr": addr,
-                "actual_radius": actual_radius
+                "count": len(cached["stations"]),
+                "stations": cached["stations"][:limit],
+                "source": "redis_cache",
+                "search_addr": search_addr,
+                "mapped_radius": mapped_radius
             }
         
-        # 5. (2단계) DB 조회 (정적 데이터만)
-        db_query = text("""
-            SELECT 
-                COALESCE(cs_id, id::text) as id,
-                COALESCE(cs_nm, name) as name,
-                COALESCE(addr, address) as address,
-                COALESCE(lat::float, ST_Y(location::geometry)) as lat,
-                COALESCE(longi::float, ST_X(location::geometry)) as lon,
-                (SELECT COUNT(1) FROM chargers c WHERE c.station_id = stations.id) as charger_count
+        # === 5. [2단계] DB 정적 데이터 조회 ===
+        static_query = text("""
+            SELECT DISTINCT
+                COALESCE(cs_id, id::text) as station_id,
+                COALESCE(cs_nm, name) as station_name,
+                COALESCE(addr, address) as station_address,
+                COALESCE(lat::float, ST_Y(location::geometry)) as latitude,
+                COALESCE(longi::float, ST_X(location::geometry)) as longitude
             FROM stations 
-            WHERE (addr ILIKE :addr OR address ILIKE :addr_pattern)
-            ORDER BY id
-            LIMIT :limit
+            WHERE (addr ILIKE :search_pattern OR address ILIKE :search_pattern)
+                AND (lat IS NOT NULL AND longi IS NOT NULL)
+            ORDER BY station_id
+            LIMIT 50
         """)
         
-        db_result = await db.execute(db_query, {
-            "addr": f"%{addr}%",
-            "addr_pattern": f"%{addr.split()[0]}%",  # 첫 번째 지역명으로도 검색
-            "limit": limit * 2  # 충분한 데이터 확보
+        db_result = await db.execute(static_query, {
+            "search_pattern": f"%{search_addr.split()[0]}%"
         })
         
-        db_stations = []
+        static_stations = []
         for row in db_result.fetchall():
             r = row._mapping
-            if r["lat"] and r["lon"]:
-                # 거리 계산
-                distance = calculate_distance(lat, lon, float(r["lat"]), float(r["lon"]))
-                if distance <= actual_radius:
-                    db_stations.append({
-                        "id": r["id"],
-                        "name": r["name"],
-                        "address": r["address"],
-                        "lat": float(r["lat"]),
-                        "lon": float(r["lon"]),
-                        "distance_m": int(distance),
-                        "charger_count": r["charger_count"]
+            try:
+                distance = calculate_distance(lat, lon, r["latitude"], r["longitude"])
+                if distance <= mapped_radius:
+                    static_stations.append({
+                        "station_id": r["station_id"],
+                        "station_name": r["station_name"],
+                        "address": r["station_address"],
+                        "lat": r["latitude"],
+                        "lon": r["longitude"],
+                        "distance_m": int(distance)
                     })
+            except:
+                continue
         
-        if db_stations:
-            # DB에서 찾은 경우 캐시에 저장하고 반환
-            db_stations.sort(key=lambda x: x["distance_m"])
-            result_data = {
-                "stations": db_stations[:limit]
-            }
-            await set_cache(cache_key, result_data, expire=300)  # 5분 캐시
+        if static_stations:
+            static_stations.sort(key=lambda x: x["distance_m"])
+            cache_data = {"stations": static_stations}
+            await set_cache(cache_key, cache_data, expire=300)  # 5분
             
             return {
-                "message": "Data from database (static)",
-                "status": "db_hit",
-                "count": len(result_data["stations"]),
-                "stations": result_data["stations"],
+                "message": "충전소 데이터 (DB 정적 데이터)",
+                "status": "db_static",
+                "count": len(static_stations),
+                "stations": static_stations[:limit],
                 "source": "database",
-                "addr": addr,
-                "actual_radius": actual_radius
+                "search_addr": search_addr,
+                "mapped_radius": mapped_radius
             }
         
-        # 6. (3단계) KEPCO API 호출
+        # === 6. [3단계] KEPCO API 실시간 호출 ===
         kepco_url = settings.EXTERNAL_STATION_API_BASE_URL
-        kepco_api_key = settings.EXTERNAL_STATION_API_KEY
+        kepco_key = settings.EXTERNAL_STATION_API_KEY
         
-        if not kepco_url or not kepco_api_key:
-            raise HTTPException(status_code=500, detail="KEPCO API configuration missing")
+        if not kepco_url or not kepco_key:
+            raise HTTPException(
+                status_code=500,
+                detail="KEPCO API 설정 누락"
+            )
         
-        # 새로운 API 문서에 따른 GET 요청 (쿼리 파라미터 방식)
+        # API 문서 정확한 구현: GET 요청, 쿼리 파라미터
         async with httpx.AsyncClient() as client:
-            response = await client.get(
+            kepco_response = await client.get(
                 kepco_url,
                 params={
-                    "addr": addr,
-                    "apiKey": kepco_api_key,  # API 문서에서 'apiKey' 사용
-                    "returnType": "json"
+                    "addr": search_addr,           # 선택 파라미터
+                    "apiKey": kepco_key,           # 필수 파라미터 (40자리)
+                    "returnType": "json"           # 선택 파라미터
                 },
                 timeout=30.0
             )
             
-            if response.status_code != 200:
-                raise HTTPException(status_code=502, detail=f"KEPCO API error: {response.status_code}")
+            if kepco_response.status_code != 200:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"KEPCO API 오류: HTTP {kepco_response.status_code}"
+                )
             
-            kepco_data = response.json()
-            
-            # 7. KEPCO 데이터 처리 및 DB 저장 (API 문서 필드명에 맞게 수정)
-            api_stations = []
-            if "data" in kepco_data and kepco_data["data"]:
-                for item in kepco_data["data"]:
-                    try:
-                        # API 문서 필드명: lat, longi
-                        item_lat = float(item.get("lat", 0))
-                        item_lon = float(item.get("longi", 0))
-                        
-                        if item_lat == 0 or item_lon == 0:
-                            continue
-                        
-                        distance = calculate_distance(lat, lon, item_lat, item_lon)
-                        
-                        if distance <= actual_radius:
-                            station_data = {
-                                "id": item.get("csId", ""),           # 충전소ID
-                                "name": item.get("csNm", ""),         # 충전소명칭  
-                                "address": item.get("addr", ""),      # 충전기주소
-                                "lat": item_lat,
-                                "lon": item_lon,
-                                "distance_m": int(distance),
-                                "charger_count": 1,
-                                # 추가 충전기 정보
-                                "charger_id": item.get("cpId", ""),   # 충전기ID
-                                "charger_name": item.get("cpNm", ""), # 충전기명칭
-                                "charger_status": item.get("cpStat", ""), # 충전기상태코드
-                                "charge_type": item.get("chargeTp", ""), # 충전기타입
-                                "connector_type": item.get("cpTp", ""),  # 충전방식
-                                "status_update_time": item.get("statUpdateDatetime", "") # 상태갱신시각
-                            }
-                            api_stations.append(station_data)
-                            
-                            # DB에 저장 (upsert) - 정적 + 동적 데이터
-                            upsert_query = text("""
-                                INSERT INTO stations (cs_id, cs_nm, addr, lat, longi, location, created_at, updated_at)
-                                VALUES (:cs_id, :cs_nm, :addr, :lat, :longi, 
-                                        ST_SetSRID(ST_MakePoint(:longi, :lat), 4326), NOW(), NOW())
-                                ON CONFLICT (cs_id) DO UPDATE SET
-                                    cs_nm = EXCLUDED.cs_nm,
-                                    addr = EXCLUDED.addr,
-                                    lat = EXCLUDED.lat,
-                                    longi = EXCLUDED.longi,
-                                    location = EXCLUDED.location,
-                                    updated_at = NOW()
-                            """)
-                            
-                            await db.execute(upsert_query, {
-                                "cs_id": item.get("csId"),
-                                "cs_nm": item.get("csNm"), 
-                                "addr": item.get("addr"),
-                                "lat": str(item_lat),
-                                "longi": str(item_lon)
-                            })
-                            
-                            # 충전기 데이터도 저장
-                            charger_upsert = text("""
-                                INSERT INTO chargers (cp_id, cp_nm, cp_stat, charge_tp, cp_tp, 
-                                                    kepco_stat_update_datetime, cs_id, created_at, updated_at)
-                                VALUES (:cp_id, :cp_nm, :cp_stat, :charge_tp, :cp_tp, 
-                                        :stat_update_time, :cs_id, NOW(), NOW())
-                                ON CONFLICT (cp_id) DO UPDATE SET
-                                    cp_nm = EXCLUDED.cp_nm,
-                                    cp_stat = EXCLUDED.cp_stat,
-                                    charge_tp = EXCLUDED.charge_tp,
-                                    cp_tp = EXCLUDED.cp_tp,
-                                    kepco_stat_update_datetime = EXCLUDED.kepco_stat_update_datetime,
-                                    updated_at = NOW()
-                            """)
-                            
-                            await db.execute(charger_upsert, {
-                                "cp_id": item.get("cpId"),
-                                "cp_nm": item.get("cpNm"),
-                                "cp_stat": item.get("cpStat"),
-                                "charge_tp": item.get("chargeTp"),
-                                "cp_tp": item.get("cpTp"),
-                                "stat_update_time": item.get("statUpdateDatetime"),
-                                "cs_id": item.get("csId")
-                            })
-                            
-                    except (ValueError, TypeError, Exception):
+            kepco_json = kepco_response.json()
+        
+        # === 7. KEPCO 응답 데이터 처리 ===
+        stations_list = []
+        if "data" in kepco_json and isinstance(kepco_json["data"], list):
+            for item in kepco_json["data"]:
+                try:
+                    # API 문서 필드명 정확히 매핑
+                    station_lat = float(item.get("lat", 0))
+                    station_lon = float(item.get("longi", 0))
+                    
+                    if station_lat == 0 or station_lon == 0:
                         continue
-                
-                await db.commit()
+                    
+                    # 거리 필터링
+                    distance = calculate_distance(lat, lon, station_lat, station_lon)
+                    if distance > mapped_radius:
+                        continue
+                    
+                    # 응답 데이터 구성 (API 문서 필드명 사용)
+                    processed_station = {
+                        "station_id": item.get("csId", ""),        # 충전소ID
+                        "station_name": item.get("csNm", ""),      # 충전소명칭
+                        "address": item.get("addr", ""),           # 충전기주소
+                        "lat": station_lat,                        # 위도
+                        "lon": station_lon,                        # 경도
+                        "distance_m": int(distance),
+                        # 충전기 세부 정보
+                        "charger_id": item.get("cpId", ""),        # 충전기ID
+                        "charger_name": item.get("cpNm", ""),      # 충전기명칭
+                        "charger_status": item.get("cpStat", ""),  # 상태코드 (1:충전가능, 2:충전중, ...)
+                        "charge_type": item.get("chargeTp", ""),   # 충전기타입 (1:완속, 2:급속)
+                        "connector_type": item.get("cpTp", ""),    # 충전방식 (1:B타입, 2:C타입, ...)
+                        "last_updated": item.get("statUpdateDatetime", "")  # 상태갱신시각
+                    }
+                    stations_list.append(processed_station)
+                    
+                    # === 8. DB 저장 (정적 + 동적 데이터) ===
+                    # 충전소 테이블 upsert
+                    station_upsert = text("""
+                        INSERT INTO stations (cs_id, cs_nm, addr, lat, longi, location, updated_at)
+                        VALUES (:cs_id, :cs_nm, :addr, :lat, :longi, 
+                                ST_SetSRID(ST_MakePoint(:longi, :lat), 4326), NOW())
+                        ON CONFLICT (cs_id) DO UPDATE SET
+                            cs_nm = EXCLUDED.cs_nm,
+                            addr = EXCLUDED.addr,
+                            lat = EXCLUDED.lat,
+                            longi = EXCLUDED.longi,
+                            location = EXCLUDED.location,
+                            updated_at = NOW()
+                    """)
+                    
+                    await db.execute(station_upsert, {
+                        "cs_id": item.get("csId"),
+                        "cs_nm": item.get("csNm"),
+                        "addr": item.get("addr"),
+                        "lat": str(station_lat),
+                        "longi": str(station_lon)
+                    })
+                    
+                    # 충전기 테이블 upsert
+                    charger_upsert = text("""
+                        INSERT INTO chargers (cp_id, cp_nm, cp_stat, charge_tp, cp_tp, 
+                                            kepco_stat_update_datetime, cs_id, updated_at)
+                        VALUES (:cp_id, :cp_nm, :cp_stat, :charge_tp, :cp_tp, 
+                                :stat_time, :cs_id, NOW())
+                        ON CONFLICT (cp_id) DO UPDATE SET
+                            cp_nm = EXCLUDED.cp_nm,
+                            cp_stat = EXCLUDED.cp_stat,
+                            charge_tp = EXCLUDED.charge_tp,
+                            cp_tp = EXCLUDED.cp_tp,
+                            kepco_stat_update_datetime = EXCLUDED.kepco_stat_update_datetime,
+                            updated_at = NOW()
+                    """)
+                    
+                    await db.execute(charger_upsert, {
+                        "cp_id": item.get("cpId"),
+                        "cp_nm": item.get("cpNm"),
+                        "cp_stat": item.get("cpStat"),
+                        "charge_tp": item.get("chargeTp"),
+                        "cp_tp": item.get("cpTp"),
+                        "stat_time": item.get("statUpdateDatetime"),
+                        "cs_id": item.get("csId")
+                    })
+                    
+                except (ValueError, TypeError):
+                    continue
             
-            # 8. 결과 정렬 및 캐시 저장
-            api_stations.sort(key=lambda x: x["distance_m"])
-            final_stations = api_stations[:limit]
-            
-            result_data = {"stations": final_stations}
-            await set_cache(cache_key, result_data, expire=1800)  # 30분 캐시
-            
-            return {
-                "message": "Data from KEPCO API (saved to DB & cache)",
-                "status": "api_call",
-                "count": len(final_stations),
-                "stations": final_stations,
-                "source": "kepco_api",
-                "addr": addr,
-                "actual_radius": actual_radius
-            }
+            # DB 커밋
+            await db.commit()
+        
+        # === 9. 최종 결과 정리 및 캐시 저장 ===
+        stations_list.sort(key=lambda x: x["distance_m"])
+        final_result = stations_list[:limit]
+        
+        # 30분 캐시 저장
+        cache_data = {"stations": stations_list}
+        await set_cache(cache_key, cache_data, expire=1800)
+        
+        return {
+            "message": "충전소 데이터 (KEPCO API 실시간 조회)",
+            "status": "kepco_api_success",
+            "count": len(final_result),
+            "stations": final_result,
+            "source": "kepco_realtime",
+            "search_addr": search_addr,
+            "mapped_radius": mapped_radius,
+            "total_found": len(stations_list)
+        }
         
     except Exception as e:
         raise HTTPException(
