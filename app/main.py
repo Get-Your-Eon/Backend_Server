@@ -12,6 +12,8 @@ from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 from redis.asyncio import Redis
+import httpx
+import math
 
 # 프로젝트 내부 모듈 임포트
 from app.core.config import settings
@@ -25,10 +27,6 @@ from app.redis_client import (
 )
 from app.api.v1.api import api_router
 from app.api.deps import frontend_api_key_required
-from fastapi import Body
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.database import get_async_session
 
 # --- 환경 변수로 관리자 모드 판단 ---
 IS_ADMIN = os.getenv("ADMIN_MODE", "false").lower() == "true"
@@ -266,8 +264,6 @@ async def search_ev_stations(
     반경 기준값: 500, 1000, 3000, 5000, 10000 (요청값을 올림)
     """
     try:
-        import httpx
-        import math
         from app.core.config import settings
         from app.redis_client import get_cache, set_cache
         
