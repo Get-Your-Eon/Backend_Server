@@ -239,6 +239,25 @@ async def subsidy_lookup_camel(manufacturer: str, modelGroup: str, db: AsyncSess
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- 충전소/충전기 검색 엔드포인트 (보조금 기능과 완전 독립) ---
+@app.get("/api/v1/stations-test-new", tags=["Station"], summary="NEW CODE TEST - EV charging stations")
+async def search_ev_stations_new_test(
+    lat: float = Query(..., description="위도", ge=-90, le=90),
+    lon: float = Query(..., description="경도", ge=-180, le=180),
+    radius: int = Query(..., description="검색 반경(미터)", ge=100, le=10000),
+    page: int = Query(1, description="페이지 번호", ge=1),
+    limit: int = Query(20, description="페이지당 결과 수", ge=1, le=100),
+    api_key: str = Depends(frontend_api_key_required),
+    db: AsyncSession = Depends(get_async_session),
+    redis_client: Redis = Depends(get_redis_client)
+):
+    """🚨 NEW CODE TEST ENDPOINT"""
+    print(f"🔥🔥🔥 TEST ENDPOINT - NEW CODE CONFIRMED RUNNING 🔥🔥🔥")
+    return {
+        "message": "NEW CODE IS RUNNING!",
+        "timestamp": datetime.now().isoformat(),
+        "received_params": {"lat": lat, "lon": lon, "radius": radius}
+    }
+
 @app.get("/api/v1/stations", tags=["Station"], summary="Search EV charging stations and chargers")
 async def search_ev_stations(
     lat: float = Query(..., description="Latitude coordinate (required from frontend)"),
@@ -264,9 +283,12 @@ async def search_ev_stations(
     반경 기준값: 500, 1000, 3000, 5000, 10000 (요청값을 올림)
     """
     # 🚨 CRITICAL DEBUG: 새 코드 실행 확인용 로그
+    print(f"🔥🔥🔥 ABSOLUTELY NEW CODE VERSION 2025-10-24-02:18 🔥🔥🔥")
     print(f"🔥 NEW CODE EXECUTING - search_ev_stations called with lat={lat}, lon={lon}, radius={radius}")
     print(f"🔥 TIMESTAMP: {datetime.now()}")
     print(f"🔥 This should appear in Render logs if new code is running!")
+    print(f"🔥 Expected URL: https://bigdata.kepco.co.kr/openapi/v1/EVchargeManage.do")
+    print(f"🔥 NOT: /ws/chargePoint/curChargePoint (old version)")
     
     try:
         from app.core.config import settings
@@ -400,6 +422,8 @@ async def search_ev_stations(
         print(f"🔥 KEPCO URL: {kepco_url}")
         print(f"🔥 KEPCO KEY: {kepco_key[:10] if kepco_key else 'None'}...")
         print(f"🔥 Search Address: {search_addr}")
+        print(f"🔥 ENVIRONMENT: {settings.ENVIRONMENT}")
+        print(f"🔥 About to call: {kepco_url}?addr={search_addr}&apiKey={kepco_key[:5]}...&returnType=json")
         
         if not kepco_url or not kepco_key:
             raise HTTPException(
