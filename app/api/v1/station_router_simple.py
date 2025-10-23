@@ -35,8 +35,11 @@ async def search_stations(
     try:
         # For now, return a simple message indicating the endpoint is ready
         # This ensures no interference with subsidy functionality
+        # Updated: Force new deployment
         return {
-            "message": "Station search endpoint is ready",
+            "message": "Station search endpoint is ready (v2)",
+            "status": "active",
+            "timestamp": "2025-10-23",
             "parameters": {
                 "lat": lat,
                 "lon": lon, 
