@@ -265,48 +265,91 @@ async def search_stations_direct(
     - limit: Results per page (default: 20)
     """
     try:
-        offset = (page - 1) * limit
+        # KEPCO API를 사용하여 실시간 충전소 데이터 조회
+        import httpx
+        from app.core.config import settings
         
-        # PostGIS를 사용한 위치 기반 쿼리 (KEPCO API 호출 없음)
-        query_sql = """
-        SELECT
-          COALESCE(station_code, id::text) AS id,
-          name,
-          address,
-          ST_Y(location::geometry) AS lat,
-          ST_X(location::geometry) AS lon,
-          ST_Distance(location::geography, ST_SetSRID(ST_MakePoint(:lon, :lat),4326)::geography) AS distance_m,
-          (SELECT COUNT(1) FROM chargers c WHERE c.station_id = stations.id) AS charger_count
-        FROM stations
-        WHERE location IS NOT NULL
-          AND ST_DWithin(location::geography, ST_SetSRID(ST_MakePoint(:lon, :lat),4326)::geography, :radius)
-        ORDER BY distance_m
-        LIMIT :limit OFFSET :offset
-        """
+        # KEPCO API 호출
+        kepco_url = settings.EXTERNAL_STATION_API_BASE_URL
+        kepco_api_key = settings.EXTERNAL_STATION_API_KEY
         
-        result = await db.execute(text(query_sql), {
-            "lat": lat,
-            "lon": lon,
-            "radius": radius,
-            "limit": limit,
-            "offset": offset
-        })
+        if not kepco_url or not kepco_api_key:
+            raise HTTPException(
+                status_code=500,
+                detail="KEPCO API configuration missing"
+            )
         
-        stations = []
-        for row in result.fetchall():
-            r = row._mapping
-            stations.append({
-                "id": r["id"],
-                "name": r["name"], 
-                "address": r["address"],
-                "lat": float(r["lat"]) if r["lat"] else None,
-                "lon": float(r["lon"]) if r["lon"] else None,
-                "distance_m": int(r["distance_m"]) if r["distance_m"] else None,
-                "charger_count": r["charger_count"]
-            })
+        # KEPCO API 요청 데이터 구성
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                kepco_url,
+                json={
+                    "api_key": kepco_api_key,
+                    "returnType": "json"
+                },
+                headers={
+                    "Content-Type": "application/json"
+                },
+                timeout=30.0
+            )
+            
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"KEPCO API error: {response.status_code}"
+                )
+            
+            kepco_data = response.json()
+            
+            # KEPCO 응답 데이터에서 충전소 필터링 (위치 기반)
+            stations = []
+            if "data" in kepco_data:
+                import math
+                
+                def calculate_distance(lat1, lon1, lat2, lon2):
+                    """두 지점 간의 거리를 미터 단위로 계산"""
+                    R = 6371000  # 지구 반지름 (미터)
+                    lat1_rad = math.radians(float(lat1))
+                    lat2_rad = math.radians(float(lat2))
+                    delta_lat = math.radians(float(lat2) - float(lat1))
+                    delta_lon = math.radians(float(lon2) - float(lon1))
+                    
+                    a = (math.sin(delta_lat/2) * math.sin(delta_lat/2) +
+                         math.cos(lat1_rad) * math.cos(lat2_rad) *
+                         math.sin(delta_lon/2) * math.sin(delta_lon/2))
+                    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+                    return R * c
+                
+                for item in kepco_data["data"]:
+                    try:
+                        item_lat = float(item.get("lat", 0))
+                        item_lon = float(item.get("longi", 0))
+                        
+                        if item_lat == 0 or item_lon == 0:
+                            continue
+                            
+                        distance = calculate_distance(lat, lon, item_lat, item_lon)
+                        
+                        if distance <= radius:
+                            stations.append({
+                                "id": item.get("csId", ""),
+                                "name": item.get("csNm", ""),
+                                "address": item.get("addr", ""),
+                                "lat": item_lat,
+                                "lon": item_lon,
+                                "distance_m": int(distance),
+                                "charger_count": 1  # KEPCO에서는 개별 충전기 단위로 제공
+                            })
+                    except (ValueError, TypeError):
+                        continue
+                
+                # 거리순 정렬 및 페이징
+                stations.sort(key=lambda x: x["distance_m"])
+                offset = (page - 1) * limit
+                stations = stations[offset:offset + limit]
         
         return {
-            "message": "Station search completed successfully",
+            "message": "KEPCO API station search completed successfully",
             "status": "success",
             "count": len(stations),
             "stations": stations,
