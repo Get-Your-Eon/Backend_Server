@@ -3,7 +3,7 @@ import time
 from datetime import datetime
 import os
 
-from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Header, Body
+from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Header, Body, Query
 from typing import Optional
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -239,6 +239,45 @@ async def subsidy_lookup_camel(manufacturer: str, modelGroup: str, db: AsyncSess
         return JSONResponse(status_code=200, content=mapped)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# --- 충전소 검색 엔드포인트 (보조금 기능과 독립) ---
+@app.get("/api/v1/stations", tags=["Station"], summary="Search charging stations by location")
+async def search_stations_direct(
+    lat: float = Query(..., description="Latitude (required)", ge=-90, le=90),
+    lon: float = Query(..., description="Longitude (required)", ge=-180, le=180), 
+    radius: int = Query(..., description="Search radius in meters (required)", ge=100, le=10000),
+    page: int = Query(1, description="Page number", ge=1),
+    limit: int = Query(20, description="Results per page", ge=1, le=100),
+    _: bool = Depends(frontend_api_key_required)
+):
+    """
+    Search for EV charging stations within specified radius.
+    
+    Required parameters (no default values):
+    - lat: Latitude coordinate  
+    - lon: Longitude coordinate
+    - radius: Search radius in meters (프론트엔드에서 필수로 제공)
+    - x-api-key: API key in header
+    
+    Optional parameters:
+    - page: Page number (default: 1)
+    - limit: Results per page (default: 20)
+    """
+    return {
+        "message": "Station search endpoint is ready (DIRECT v3)",
+        "status": "active_direct",
+        "timestamp": "2025-10-23T14:30:00Z",
+        "required_params_received": {
+            "lat": lat,
+            "lon": lon, 
+            "radius": radius
+        },
+        "optional_params": {
+            "page": page,
+            "limit": limit
+        },
+        "note": "Station functionality completely isolated from subsidy features"
+    }
 
 # --- V1 API 라우터 포함 (일반 사용자 접근 가능) ---
 app.include_router(api_router, prefix="/api/v1")
