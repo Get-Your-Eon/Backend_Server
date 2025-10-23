@@ -263,6 +263,11 @@ async def search_ev_stations(
     
     반경 기준값: 500, 1000, 3000, 5000, 10000 (요청값을 올림)
     """
+    # 🚨 CRITICAL DEBUG: 새 코드 실행 확인용 로그
+    print(f"🔥 NEW CODE EXECUTING - search_ev_stations called with lat={lat}, lon={lon}, radius={radius}")
+    print(f"🔥 TIMESTAMP: {datetime.now()}")
+    print(f"🔥 This should appear in Render logs if new code is running!")
+    
     try:
         from app.core.config import settings
         from app.redis_client import get_cache, set_cache
@@ -390,6 +395,11 @@ async def search_ev_stations(
         # === 6. [3단계] KEPCO API 실시간 호출 ===
         kepco_url = settings.EXTERNAL_STATION_API_BASE_URL
         kepco_key = settings.EXTERNAL_STATION_API_KEY
+        
+        # 🚨 CRITICAL DEBUG: KEPCO 설정 확인
+        print(f"🔥 KEPCO URL: {kepco_url}")
+        print(f"🔥 KEPCO KEY: {kepco_key[:10] if kepco_key else 'None'}...")
+        print(f"🔥 Search Address: {search_addr}")
         
         if not kepco_url or not kepco_key:
             raise HTTPException(
