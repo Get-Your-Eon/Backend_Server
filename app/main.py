@@ -3,7 +3,7 @@ import time
 from datetime import datetime
 import os
 
-from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Header, Body, Query
+from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Header, Body, Query, Path
 from typing import Optional
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -356,17 +356,21 @@ async def search_ev_stations_requirement_compliant(
         print(f"✅ DB 조회 시작...")
         try:
             # 정적 데이터 조회 (충전기 상태코드 제외)
+            # NOTE: some deployments may not have KEPCO-specific columns (cs_nm/addr).
+            # To remain resilient against schema drift we select stable columns
+            # and map them to the expected keys in Python.
+            # Note: production DB uses PostGIS `location` (geometry/point) and columns `name`/`address`.
+            # Use ST_Y(location) for latitude and ST_X(location) for longitude. Keep COALESCE for address/name.
             db_query = """
-                SELECT DISTINCT 
+                SELECT DISTINCT
                     cs_id as station_id,
-                    addr,
-                    cs_nm as station_name,
-                    lat::text,
-                    longi::text as lon
-                FROM stations 
-                WHERE addr LIKE :addr_pattern
-                AND lat IS NOT NULL 
-                AND longi IS NOT NULL
+                    COALESCE(address, '') as addr,
+                    COALESCE(name, '') as station_name,
+                    ST_Y(location)::text as lat,
+                    ST_X(location)::text as lon
+                FROM stations
+                WHERE (COALESCE(address, '') LIKE :addr_pattern OR COALESCE(name, '') LIKE :addr_pattern)
+                AND location IS NOT NULL
                 ORDER BY cs_id
                 LIMIT 100
             """
@@ -421,6 +425,12 @@ async def search_ev_stations_requirement_compliant(
                         "stations": db_result
                     }
         except Exception as db_error:
+            # If a DB error occurs, rollback the session so subsequent DB commands
+            # (e.g. inserts) are not run inside an aborted transaction.
+            try:
+                await db.rollback()
+            except Exception:
+                pass
             print(f"⚠️ DB 조회 오류: {db_error}")
         
         # === 5단계: API 호출 및 저장 ===
@@ -489,25 +499,32 @@ async def search_ev_stations_requirement_compliant(
                         
                         # DB에 저장 (정적 데이터)
                         try:
+                            # Use PostGIS location column. Some DBs don't have lat/long columns.
                             insert_sql = """
-                                INSERT INTO stations (cs_id, addr, cs_nm, lat, longi, stat_update_datetime)
-                                VALUES (:cs_id, :addr, :cs_nm, :lat, :longi, :update_time)
+                                INSERT INTO stations (cs_id, address, name, location, raw_data, stat_update_datetime)
+                                VALUES (:cs_id, :address, :name, ST_SetSRID(ST_MakePoint(:longi, :lat), 4326), :raw_data, :update_time)
                                 ON CONFLICT (cs_id) DO UPDATE SET
-                                    addr = EXCLUDED.addr,
-                                    cs_nm = EXCLUDED.cs_nm,
-                                    lat = EXCLUDED.lat,
-                                    longi = EXCLUDED.longi,
+                                    address = EXCLUDED.address,
+                                    name = EXCLUDED.name,
+                                    location = EXCLUDED.location,
+                                    raw_data = EXCLUDED.raw_data,
                                     stat_update_datetime = EXCLUDED.stat_update_datetime
                             """
                             await db.execute(text(insert_sql), {
                                 "cs_id": item.get("csId"),
-                                "addr": item.get("addr"),
-                                "cs_nm": item.get("csNm"),
+                                "address": item.get("addr"),
+                                "name": item.get("csNm"),
                                 "lat": item_lat,
                                 "longi": item_lon,
+                                "raw_data": json.dumps(item, ensure_ascii=False),
                                 "update_time": now
                             })
                         except Exception as insert_error:
+                            # If insert fails, rollback so the session is usable for later operations
+                            try:
+                                await db.rollback()
+                            except Exception:
+                                pass
                             print(f"⚠️ DB 저장 오류: {insert_error}")
                     
                     except Exception as item_error:
@@ -782,7 +799,7 @@ async def redis_test_endpoint(redis_client: Redis = Depends(get_redis_client)):
 # --- 충전소 아이콘 클릭 → 충전기 스펙 조회 엔드포인트 ---
 @app.get("/api/v1/station/{station_id}/chargers", tags=["Station"], summary="✅ 충전기 스펙 조회 (요구사항 준수)")
 async def get_station_charger_specs(
-    station_id: str = Query(..., description="충전소ID (string 타입)"),
+    station_id: str = Path(..., description="충전소ID (string 타입)"),
     addr: str = Query(..., description="충전기주소 (string 타입)"),
     api_key: str = Depends(frontend_api_key_required),
     db: AsyncSession = Depends(get_async_session),
@@ -803,15 +820,26 @@ async def get_station_charger_specs(
         print(f"✅ DB에서 충전소 정보 조회...")
         
         # 정적 데이터 조회
+        # NOTE: avoid referencing potentially-missing KEPCO-specific columns directly.
+        # Select stable columns and map them into the expected keys.
         station_query = """
-            SELECT cs_id, cs_nm, addr, lat, longi, stat_update_datetime
+            SELECT cs_id, COALESCE(name, '') AS cs_nm, COALESCE(address, '') AS addr,
+                   ST_Y(location)::text AS lat, ST_X(location)::text AS longi, stat_update_datetime
             FROM stations 
             WHERE cs_id = :station_id
             LIMIT 1
         """
-        
-        station_result = await db.execute(text(station_query), {"station_id": station_id})
-        station_row = station_result.fetchone()
+        try:
+            station_result = await db.execute(text(station_query), {"station_id": station_id})
+            station_row = station_result.fetchone()
+        except Exception as station_db_error:
+            # rollback so the session is usable for later DB operations
+            try:
+                await db.rollback()
+            except Exception:
+                pass
+            print(f"⚠️ DB 조회 오류(충전소 상세): {station_db_error}")
+            station_row = None
         
         if not station_row:
             print(f"⚠️ DB에서 충전소 정보 없음, API 호출로 진행")
@@ -952,6 +980,11 @@ async def get_station_charger_specs(
                                                 "update_time": now
                                             })
                                         except Exception as db_error:
+                                            # Rollback to clear aborted transaction state
+                                            try:
+                                                await db.rollback()
+                                            except Exception:
+                                                pass
                                             print(f"⚠️ 충전기 DB 저장 오류: {db_error}")
                                 
                                 except Exception as item_error:
