@@ -3,7 +3,7 @@ import time
 from datetime import datetime
 import os
 
-from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Header, Body, Query
+from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Header, Body, Query, Path
 from typing import Optional
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -782,7 +782,7 @@ async def redis_test_endpoint(redis_client: Redis = Depends(get_redis_client)):
 # --- 충전소 아이콘 클릭 → 충전기 스펙 조회 엔드포인트 ---
 @app.get("/api/v1/station/{station_id}/chargers", tags=["Station"], summary="✅ 충전기 스펙 조회 (요구사항 준수)")
 async def get_station_charger_specs(
-    station_id: str = Query(..., description="충전소ID (string 타입)"),
+    station_id: str = Path(..., description="충전소ID (string 타입)"),
     addr: str = Query(..., description="충전기주소 (string 타입)"),
     api_key: str = Depends(frontend_api_key_required),
     db: AsyncSession = Depends(get_async_session),
