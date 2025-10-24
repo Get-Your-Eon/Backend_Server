@@ -274,10 +274,12 @@ async def kepco_2025_new_api_implementation(
     이전 URL: /ws/chargePoint/curChargePoint (삭제됨)
     새 URL: /EVchargeManage.do (정확함)
     """
-    print(f"��� KEPCO 2025 COMPLETELY NEW CODE ���")
-    print(f"� Function: kepco_2025_new_api_implementation")
-    print(f"� Time: {datetime.now()}")
-    print(f"� Params: lat={lat}, lon={lon}, radius={radius}")
+    print(f"🚀🚀🚀 KEPCO 2025 COMPLETELY NEW CODE 🚀🚀🚀")
+    print(f"🚀 Function: kepco_2025_new_api_implementation")
+    print(f"🚀 Time: {datetime.now()}")
+    print(f"🚀 Params: lat={lat}, lon={lon}, radius={radius}")
+    print(f"🚀 ABSOLUTE CONFIRMATION: This is the NEW CODE running!")
+    print(f"🚀 Expected KEPCO URL: https://bigdata.kepco.co.kr/openapi/v1/EVchargeManage.do")
     
     try:
         from app.core.config import settings
