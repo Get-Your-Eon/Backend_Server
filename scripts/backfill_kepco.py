@@ -31,13 +31,12 @@ if not KEPCO_KEY:
     print('ERROR: No KEPCO API key provided. Set EXTERNAL_STATION_API_KEY or KEPCO_API_KEY environment variable.')
     sys.exit(1)
 
-# Addresses to query (use the list validated earlier)
+# Addresses to query: use gu-level queries for 성남시 to reduce number of API calls and load.
+# We will query each 구 (district) of 성남시 and optionally expand to dong level later.
 ADDRESSES = [
-    "경기도 성남시 분당구 분당로 50 (수내동, 분당구청) 실외주차장",
-    "경기도 성남시 분당구 황새울로 273 (수내동) B1",
-    "경기도 성남시 분당구 동판교로 122 (백현동, 백현마을2단지아파트) 203동 지하 2층 주차장",
-    "경기도 성남시 분당구 판교역로 98 (백현동, 백현마을7단지아파트) 지상1층 주차장 주민센터 앞",
-    "경기도 성남시 분당구 대왕판교로606번길 58 (삼평동, 판교푸르지오월드마크) 지하 4층 주차장",
+    "경기도 성남시 수정구",
+    "경기도 성남시 중원구",
+    "경기도 성남시 분당구",
 ]
 
 # Create synchronous SQLAlchemy engine
@@ -170,16 +169,37 @@ def upsert_station_and_charger(conn, item):
     return 1, charger_count
 
 
-def fetch_and_store(address):
+def fetch_only(address, max_retries=2):
+    """Fetch items from KEPCO API for an address and return list of items (no DB writes).
+    Retries a small number of times on transient errors.
+    """
     params = {'addr': address, 'apiKey': KEPCO_KEY, 'returnType': 'json'}
-    print('Requesting', address)
-    r = requests.get(KEPCO_URL, params=params, timeout=20)
-    r.raise_for_status()
-    j = r.json()
-    data = j.get('data') if isinstance(j, dict) else None
+    tries = 0
+    while True:
+        tries += 1
+        try:
+            print('Requesting', address)
+            r = requests.get(KEPCO_URL, params=params, timeout=20)
+            r.raise_for_status()
+            j = r.json()
+            data = j.get('data') if isinstance(j, dict) else None
+            if not data:
+                print('  -> no data returned')
+                return []
+            return data
+        except Exception as e:
+            print(f'  -> request error (attempt {tries}):', e)
+            if tries > max_retries:
+                print('  -> giving up for', address)
+                return []
+            time.sleep(1 + tries)
+
+
+def fetch_and_store(address):
+    """Existing behavior: fetch and store into DB. Kept separate so dry-run can use fetch_only."""
+    data = fetch_only(address)
     if not data:
-        print('  -> no data returned')
-        return 0,0
+        return 0, 0
 
     with engine.begin() as conn:
         stations_inserted = 0
@@ -193,14 +213,50 @@ def fetch_and_store(address):
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description='Backfill KEPCO data (성남시)')
+    parser.add_argument('--dry-run', action='store_true', help='Fetch only and report unique stations (no DB writes)')
+    parser.add_argument('--sleep', type=float, default=1.0, help='Seconds to sleep between address requests')
+    parser.add_argument('--commit', action='store_true', help='Actually perform DB writes (default is to not commit unless set)')
+    args = parser.parse_args()
+
+    # If dry-run, just fetch and deduplicate cs_id to estimate load
+    if args.dry_run and not args.commit:
+        print('DRY RUN: fetching data for addresses (no DB writes)')
+        found_cs = set()
+        total_items = 0
+        for addr in ADDRESSES:
+            try:
+                items = fetch_only(addr)
+                total_items += len(items)
+                for it in items:
+                    cs = str(it.get('csId') or it.get('Csid') or '').strip()
+                    if cs:
+                        found_cs.add(cs)
+                time.sleep(args.sleep)
+            except Exception as e:
+                print('ERROR fetching', addr, e)
+        print('DRY RUN RESULT: addresses:', len(ADDRESSES), 'total items fetched:', total_items,
+              'unique stations (cs_id):', len(found_cs))
+        print('Sample cs_ids:', list(found_cs)[:20])
+        return
+
+    # Otherwise perform commit mode (requires --commit flag)
+    if not args.commit:
+        print('No --commit flag provided. To perform DB writes pass --commit. Use --dry-run to estimate first.')
+        return
+
+    # Commit mode: perform backup prompt and then run writes with throttling
+    print('COMMIT MODE: will write to DB. Running addresses:', ADDRESSES)
     total_s = 0
     total_c = 0
     for addr in ADDRESSES:
         try:
-            s,c = fetch_and_store(addr)
+            s, c = fetch_and_store(addr)
             total_s += s
             total_c += c
-            time.sleep(0.5)
+            time.sleep(args.sleep)
         except Exception as e:
             print('ERROR for', addr, e)
     print('Done. Total stations:', total_s, 'Total chargers:', total_c)
