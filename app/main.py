@@ -487,36 +487,104 @@ async def search_ev_stations_requirement_compliant(
                         }
                         api_stations.append(station_data)
                         
-                        # DB에 저장 (정적 데이터)
+                        # DB에 저장 (정적 데이터) - 안전한 방식
                         try:
+                            # 기존 컬럼으로 시도 (안전한 저장)
                             insert_sql = """
-                                INSERT INTO stations (cs_id, addr, cs_nm, lat, longi, stat_update_datetime)
-                                VALUES (:cs_id, :addr, :cs_nm, :lat, :longi, :update_time)
+                                INSERT INTO stations (
+                                    station_code, name, address, cs_id, cs_nm, addr, lat, longi, 
+                                    static_data_updated_at, updated_at
+                                )
+                                VALUES (
+                                    :station_code, :name, :address, :cs_id, :cs_nm, :addr, :lat, :longi,
+                                    :update_time, :update_time
+                                )
                                 ON CONFLICT (cs_id) DO UPDATE SET
-                                    addr = EXCLUDED.addr,
+                                    name = COALESCE(EXCLUDED.cs_nm, EXCLUDED.name),
+                                    address = COALESCE(EXCLUDED.addr, EXCLUDED.address),
                                     cs_nm = EXCLUDED.cs_nm,
+                                    addr = EXCLUDED.addr,
                                     lat = EXCLUDED.lat,
                                     longi = EXCLUDED.longi,
-                                    stat_update_datetime = EXCLUDED.stat_update_datetime
+                                    static_data_updated_at = EXCLUDED.static_data_updated_at,
+                                    updated_at = EXCLUDED.updated_at
+                                WHERE stations.cs_id = EXCLUDED.cs_id
                             """
+                            
                             await db.execute(text(insert_sql), {
-                                "cs_id": item.get("csId"),
-                                "addr": item.get("addr"),
-                                "cs_nm": item.get("csNm"),
-                                "lat": item_lat,
-                                "longi": item_lon,
+                                "station_code": item.get("csId"),  # station_code도 설정
+                                "name": item.get("csNm"),         # 기존 name 컬럼
+                                "address": item.get("addr"),      # 기존 address 컬럼
+                                "cs_id": item.get("csId"),        # KEPCO cs_id
+                                "cs_nm": item.get("csNm"),        # KEPCO cs_nm
+                                "addr": item.get("addr"),         # KEPCO addr
+                                "lat": str(item_lat),             # 위도
+                                "longi": str(item_lon),           # 경도
                                 "update_time": now
                             })
                         except Exception as insert_error:
-                            print(f"⚠️ DB 저장 오류: {insert_error}")
+                            print(f"⚠️ 충전소 DB 저장 오류: {insert_error}")
+                            # 최소한의 기본 컬럼으로만 저장 시도
+                            try:
+                                basic_insert_sql = """
+                                    INSERT INTO stations (station_code, name, address, updated_at)
+                                    VALUES (:station_code, :name, :address, :update_time)
+                                    ON CONFLICT (station_code) DO UPDATE SET
+                                        name = EXCLUDED.name,
+                                        address = EXCLUDED.address,
+                                        updated_at = EXCLUDED.updated_at
+                                """
+                                await db.execute(text(basic_insert_sql), {
+                                    "station_code": item.get("csId"),
+                                    "name": item.get("csNm"),
+                                    "address": item.get("addr"),
+                                    "update_time": now
+                                })
+                                print(f"✅ 기본 컬럼으로 충전소 저장 성공")
+                            except Exception as basic_error:
+                                print(f"⚠️ 기본 충전소 저장도 실패: {basic_error}")
+                        
+                        # 충전기 정보 저장
+                        try:
+                            charger_insert_sql = """
+                                INSERT INTO chargers (
+                                    station_id, charger_code, cp_id, cp_nm, charge_tp, cp_stat, 
+                                    cs_id, updated_at
+                                )
+                                VALUES (
+                                    (SELECT id FROM stations WHERE cs_id = :cs_id LIMIT 1),
+                                    :charger_code, :cp_id, :cp_nm, :charge_tp, :cp_stat, :cs_id, :update_time
+                                )
+                                ON CONFLICT (cp_id) DO UPDATE SET
+                                    cp_nm = EXCLUDED.cp_nm,
+                                    cp_stat = EXCLUDED.cp_stat,
+                                    charge_tp = EXCLUDED.charge_tp,
+                                    updated_at = EXCLUDED.updated_time
+                                WHERE chargers.cp_id = EXCLUDED.cp_id
+                            """
+                            await db.execute(text(charger_insert_sql), {
+                                "cs_id": item.get("csId"),
+                                "charger_code": item.get("cpId"),
+                                "cp_id": item.get("cpId"),
+                                "cp_nm": item.get("cpNm"),
+                                "charge_tp": item.get("chargeTp"),
+                                "cp_stat": item.get("cpStat"),
+                                "update_time": now
+                            })
+                        except Exception as charger_error:
+                            print(f"⚠️ 충전기 DB 저장 오류: {charger_error}")
                     
                     except Exception as item_error:
                         print(f"⚠️ Item 처리 오류: {item_error}")
                         continue
                 
                 # 트랜잭션 커밋
-                await db.commit()
-                print(f"✅ DB 저장 완료: {len(api_stations)}개 충전소")
+                try:
+                    await db.commit()
+                    print(f"✅ DB 저장 완료: {len(api_stations)}개 충전소")
+                except Exception as commit_error:
+                    print(f"⚠️ 트랜잭션 커밋 오류: {commit_error}")
+                    await db.rollback()
         
         # === 7단계: Cache 저장 및 결과 반환 ===
         api_stations.sort(key=lambda x: calculate_distance_haversine(
@@ -799,34 +867,50 @@ async def get_station_charger_specs(
     print(f"✅ station_id={station_id}, addr={addr}")
     
     try:
-        # === 1단계: DB 조회 (충전소ID 활용) ===
+        # === 1단계: DB 조회 (충전소ID 활용) - 안전한 쿼리 ===
         print(f"✅ DB에서 충전소 정보 조회...")
         
-        # 정적 데이터 조회
-        station_query = """
-            SELECT cs_id, cs_nm, addr, lat, longi, stat_update_datetime
-            FROM stations 
-            WHERE cs_id = :station_id
-            LIMIT 1
-        """
-        
-        station_result = await db.execute(text(station_query), {"station_id": station_id})
-        station_row = station_result.fetchone()
-        
-        if not station_row:
-            print(f"⚠️ DB에서 충전소 정보 없음, API 호출로 진행")
+        # 기존 컬럼과 새 컬럼 모두 체크하는 안전한 쿼리
+        try:
+            # 먼저 기존 컬럼들로 시도
+            station_query = """
+                SELECT 
+                    station_code,
+                    name,
+                    address,
+                    cs_id,
+                    COALESCE(cs_nm, name) as station_name,
+                    COALESCE(addr, address) as station_addr,
+                    lat::text as lat_str,
+                    longi::text as lon_str,
+                    COALESCE(static_data_updated_at, updated_at) as last_updated
+                FROM stations 
+                WHERE cs_id = :station_id OR station_code = :station_id
+                LIMIT 1
+            """
+            
+            station_result = await db.execute(text(station_query), {"station_id": station_id})
+            station_row = station_result.fetchone()
+            
+            if station_row:
+                station_dict = station_row._mapping
+                station_info = {
+                    "station_id": str(station_dict.get("cs_id") or station_dict.get("station_code", "")),
+                    "station_name": str(station_dict.get("station_name") or ""),
+                    "addr": str(station_dict.get("station_addr") or ""),
+                    "lat": str(station_dict.get("lat_str") or ""),
+                    "lon": str(station_dict.get("lon_str") or ""),
+                    "last_updated": station_dict.get("last_updated")
+                }
+                print(f"✅ DB에서 충전소 정보 발견: {station_info['station_name']}")
+            else:
+                print(f"⚠️ DB에서 충전소 정보 없음, API 호출로 진행")
+                station_info = None
+                
+        except Exception as db_query_error:
+            print(f"⚠️ DB 쿼리 오류: {db_query_error}")
+            print(f"⚠️ API 호출로 진행...")
             station_info = None
-        else:
-            station_dict = station_row._mapping
-            station_info = {
-                "station_id": str(station_dict["cs_id"]),
-                "station_name": str(station_dict["cs_nm"]),
-                "addr": str(station_dict["addr"]),
-                "lat": str(station_dict["lat"]),
-                "lon": str(station_dict["longi"]),
-                "last_updated": station_dict["stat_update_datetime"]
-            }
-            print(f"✅ DB에서 충전소 정보 발견: {station_info['station_name']}")
         
         # === 2단계: 충전기 동적 데이터 갱신 체크 (30분 규칙) ===
         need_api_call = True
@@ -847,24 +931,35 @@ async def get_station_charger_specs(
             
             # DB에서 충전기 정보 조회
             if not need_api_call:
-                charger_query = """
-                    SELECT cp_id, cp_nm, cp_stat, charge_tp, cs_id
-                    FROM chargers 
-                    WHERE cs_id = :station_id
-                    ORDER BY cp_id
-                """
-                
-                charger_result = await db.execute(text(charger_query), {"station_id": station_id})
-                charger_rows = charger_result.fetchall()
-                
-                for row in charger_rows:
-                    row_dict = row._mapping
-                    cached_chargers.append({
-                        "charger_id": str(row_dict["cp_id"]),
-                        "charger_name": str(row_dict["cp_nm"]),
-                        "status_code": str(row_dict["cp_stat"]),
-                        "charge_type": str(row_dict["charge_tp"])
-                    })
+                try:
+                    charger_query = """
+                        SELECT 
+                            COALESCE(cp_id, external_charger_id, charger_code) as charger_id,
+                            COALESCE(cp_nm, charger_code) as charger_name,
+                            COALESCE(cp_stat, cp_stat_raw, '1') as status_code,
+                            COALESCE(charge_tp, charger_type) as charge_type
+                        FROM chargers 
+                        WHERE cs_id = :station_id OR station_id = (
+                            SELECT id FROM stations WHERE cs_id = :station_id LIMIT 1
+                        )
+                        ORDER BY charger_id
+                    """
+                    
+                    charger_result = await db.execute(text(charger_query), {"station_id": station_id})
+                    charger_rows = charger_result.fetchall()
+                    
+                    for row in charger_rows:
+                        row_dict = row._mapping
+                        cached_chargers.append({
+                            "charger_id": str(row_dict.get("charger_id", "")),
+                            "charger_name": str(row_dict.get("charger_name", "")),
+                            "status_code": str(row_dict.get("status_code", "1")),
+                            "charge_type": str(row_dict.get("charge_type", ""))
+                        })
+                        
+                except Exception as charger_query_error:
+                    print(f"⚠️ 충전기 DB 쿼리 오류: {charger_query_error}")
+                    cached_chargers = []
         
         # === 3단계: API 호출 (필요시) ===
         if need_api_call:
