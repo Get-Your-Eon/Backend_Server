@@ -14,6 +14,7 @@ from sqlalchemy import text
 from redis.asyncio import Redis
 import httpx
 import math
+import json
 
 # 프로젝트 내부 모듈 임포트
 from app.core.config import settings
@@ -258,6 +259,302 @@ async def search_ev_stations_new_test(
         "received_params": {"lat": lat, "lon": lon, "radius": radius}
     }
 
+@app.get("/api/v1/stations", tags=["Station"], summary="✅ 요구사항 완전 준수 - 충전소 검색")
+async def search_ev_stations_requirement_compliant(
+    lat: str = Query(..., description="사용자 위도 (string 타입)", regex=r"^-?\d+\.?\d*$"),
+    lon: str = Query(..., description="사용자 경도 (string 타입)", regex=r"^-?\d+\.?\d*$"),
+    radius: int = Query(..., description="반경(m) - 500/1000/3000/5000/10000 기준", ge=100, le=10000),
+    api_key: str = Depends(frontend_api_key_required),
+    db: AsyncSession = Depends(get_async_session),
+    redis_client: Redis = Depends(get_redis_client)
+):
+    """
+    ✅ 백엔드 요구사항 완전 준수 구현
+    
+    1. 사용자 위도/경도(string) → 시/군/구/동 매핑 → addr 생성
+    2. Cache 조회 → DB 조회 → API 호출 순서
+    3. 반경 기준값(500/1000/3000/5000/10000) 처리
+    4. 정적/동적 데이터 분리 저장
+    5. 응답: 충전소ID, 충전기주소(addr), 충전소명칭, 위도, 경도 (모두 string)
+    """
+    print(f"✅ 요구사항 준수 충전소 검색 시작")
+    print(f"✅ 입력: lat={lat}, lon={lon}, radius={radius}")
+    
+    try:
+        # === 1단계: 좌표 → 주소 변환 ===
+        lat_float = float(lat)
+        lon_float = float(lon)
+        
+        # Nominatim을 통한 역지오코딩
+        async with httpx.AsyncClient() as client:
+            nominatim_response = await client.get(
+                "https://nominatim.openstreetmap.org/reverse",
+                params={
+                    "lat": lat_float,
+                    "lon": lon_float,
+                    "format": "json",
+                    "accept-language": "ko",
+                    "addressdetails": 1
+                },
+                headers={"User-Agent": "Codyssey-EV-App/1.0"},
+                timeout=10.0
+            )
+            
+            if nominatim_response.status_code == 200:
+                nominatim_data = nominatim_response.json()
+                address_components = nominatim_data.get("address", {})
+                
+                # 시/군/구/동 추출
+                city = address_components.get("city") or address_components.get("town") or ""
+                district = address_components.get("borough") or address_components.get("suburb") or ""
+                addr = f"{city} {district}".strip()
+                
+                if not addr:
+                    addr = "서울특별시"  # 기본값
+            else:
+                addr = "서울특별시"  # 기본값
+        
+        print(f"✅ 매핑된 주소: {addr}")
+        
+        # === 2단계: 반경 기준값 정규화 ===
+        radius_standards = [500, 1000, 3000, 5000, 10000]
+        actual_radius = next((r for r in radius_standards if radius <= r), 10000)
+        print(f"✅ 반경 정규화: {radius} → {actual_radius}")
+        
+        # === 3단계: Cache 조회 ===
+        cache_key = f"stations:{addr}:{actual_radius}"
+        
+        try:
+            cached_data = await redis_client.get(cache_key)
+            if cached_data:
+                print(f"✅ Cache Hit: {cache_key}")
+                cached_result = json.loads(cached_data)
+                
+                # 거리 필터링 후 반환
+                filtered_stations = []
+                for station in cached_result.get("stations", []):
+                    dist = calculate_distance_haversine(
+                        lat_float, lon_float,
+                        float(station["lat"]), float(station["lon"])
+                    )
+                    if dist <= radius:
+                        station["distance_m"] = str(int(dist))
+                        filtered_stations.append(station)
+                
+                filtered_stations.sort(key=lambda x: int(x["distance_m"]))
+                
+                return {
+                    "source": "cache",
+                    "addr": addr,
+                    "radius_normalized": actual_radius,
+                    "stations": filtered_stations
+                }
+        except Exception as cache_error:
+            print(f"⚠️ Cache 오류: {cache_error}")
+        
+        # === 4단계: DB 조회 (정적 데이터) ===
+        print(f"✅ DB 조회 시작...")
+        try:
+            # 정적 데이터 조회 (충전기 상태코드 제외)
+            db_query = """
+                SELECT DISTINCT 
+                    cs_id as station_id,
+                    addr,
+                    cs_nm as station_name,
+                    lat::text,
+                    longi::text as lon
+                FROM stations 
+                WHERE addr LIKE :addr_pattern
+                AND lat IS NOT NULL 
+                AND longi IS NOT NULL
+                ORDER BY cs_id
+                LIMIT 100
+            """
+            
+            result = await db.execute(
+                text(db_query), 
+                {"addr_pattern": f"%{addr.split()[0] if addr else '서울'}%"}
+            )
+            db_stations = result.fetchall()
+            
+            if db_stations:
+                print(f"✅ DB Hit: {len(db_stations)}개 충전소 발견")
+                
+                db_result = []
+                for row in db_stations:
+                    try:
+                        row_dict = row._mapping
+                        dist = calculate_distance_haversine(
+                            lat_float, lon_float,
+                            float(row_dict["lat"]), float(row_dict["lon"])
+                        )
+                        
+                        if dist <= radius:
+                            db_result.append({
+                                "station_id": str(row_dict["station_id"]),
+                                "addr": str(row_dict["addr"]),
+                                "station_name": str(row_dict["station_name"]),
+                                "lat": str(row_dict["lat"]),
+                                "lon": str(row_dict["lon"])
+                            })
+                    except Exception as row_error:
+                        print(f"⚠️ DB row 처리 오류: {row_error}")
+                        continue
+                
+                if db_result:
+                    db_result.sort(key=lambda x: calculate_distance_haversine(
+                        lat_float, lon_float, float(x["lat"]), float(x["lon"])
+                    ))
+                    
+                    # Cache에 저장
+                    try:
+                        cache_data = {"stations": db_result, "timestamp": datetime.now().isoformat()}
+                        await redis_client.setex(cache_key, 3600, json.dumps(cache_data, ensure_ascii=False))
+                        print(f"✅ DB 결과 Cache 저장 완료")
+                    except:
+                        pass
+                    
+                    return {
+                        "source": "database",
+                        "addr": addr,
+                        "radius_normalized": actual_radius,
+                        "stations": db_result
+                    }
+        except Exception as db_error:
+            print(f"⚠️ DB 조회 오류: {db_error}")
+        
+        # === 5단계: API 호출 및 저장 ===
+        print(f"✅ KEPCO API 호출 시작...")
+        from app.core.config import settings
+        
+        kepco_url = settings.EXTERNAL_STATION_API_BASE_URL
+        kepco_key = settings.EXTERNAL_STATION_API_KEY
+        
+        if not kepco_url or not kepco_key:
+            raise HTTPException(status_code=500, detail="KEPCO API 설정 누락")
+        
+        print(f"✅ KEPCO URL: {kepco_url}")
+        print(f"✅ Making KEPCO API request to: {kepco_url}")
+        
+        async with httpx.AsyncClient() as client:
+            kepco_response = await client.get(
+                kepco_url,
+                params={
+                    "addr": addr,
+                    "apiKey": kepco_key,
+                    "returnType": "json"
+                },
+                timeout=30.0
+            )
+            
+            print(f"✅ KEPCO Response Status: {kepco_response.status_code}")
+            
+            if kepco_response.status_code != 200:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"KEPCO API 오류: HTTP {kepco_response.status_code}"
+                )
+            
+            kepco_data = kepco_response.json()
+            print(f"✅ KEPCO API 응답 수신 완료")
+        
+        # === 6단계: 데이터 처리 및 DB 저장 ===
+        api_stations = []
+        now = datetime.now()
+        
+        if isinstance(kepco_data, dict) and "data" in kepco_data:
+            raw_data = kepco_data["data"]
+            
+            if isinstance(raw_data, list):
+                for item in raw_data:
+                    try:
+                        item_lat = float(item.get("lat", 0))
+                        item_lon = float(item.get("longi", 0))
+                        
+                        if item_lat == 0 or item_lon == 0:
+                            continue
+                        
+                        dist = calculate_distance_haversine(lat_float, lon_float, item_lat, item_lon)
+                        if dist > radius:
+                            continue
+                        
+                        station_data = {
+                            "station_id": str(item.get("csId", "")),
+                            "addr": str(item.get("addr", "")),
+                            "station_name": str(item.get("csNm", "")),
+                            "lat": str(item_lat),
+                            "lon": str(item_lon)
+                        }
+                        api_stations.append(station_data)
+                        
+                        # DB에 저장 (정적 데이터)
+                        try:
+                            insert_sql = """
+                                INSERT INTO stations (cs_id, addr, cs_nm, lat, longi, stat_update_datetime)
+                                VALUES (:cs_id, :addr, :cs_nm, :lat, :longi, :update_time)
+                                ON CONFLICT (cs_id) DO UPDATE SET
+                                    addr = EXCLUDED.addr,
+                                    cs_nm = EXCLUDED.cs_nm,
+                                    lat = EXCLUDED.lat,
+                                    longi = EXCLUDED.longi,
+                                    stat_update_datetime = EXCLUDED.stat_update_datetime
+                            """
+                            await db.execute(text(insert_sql), {
+                                "cs_id": item.get("csId"),
+                                "addr": item.get("addr"),
+                                "cs_nm": item.get("csNm"),
+                                "lat": item_lat,
+                                "longi": item_lon,
+                                "update_time": now
+                            })
+                        except Exception as insert_error:
+                            print(f"⚠️ DB 저장 오류: {insert_error}")
+                    
+                    except Exception as item_error:
+                        print(f"⚠️ Item 처리 오류: {item_error}")
+                        continue
+                
+                # 트랜잭션 커밋
+                await db.commit()
+                print(f"✅ DB 저장 완료: {len(api_stations)}개 충전소")
+        
+        # === 7단계: Cache 저장 및 결과 반환 ===
+        api_stations.sort(key=lambda x: calculate_distance_haversine(
+            lat_float, lon_float, float(x["lat"]), float(x["lon"])
+        ))
+        
+        try:
+            cache_data = {"stations": api_stations, "timestamp": now.isoformat()}
+            await redis_client.setex(cache_key, 3600, json.dumps(cache_data, ensure_ascii=False))
+            print(f"✅ API 결과 Cache 저장 완료")
+        except:
+            pass
+        
+        return {
+            "source": "kepco_api",
+            "addr": addr,
+            "radius_normalized": actual_radius,
+            "stations": api_stations
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"🚨 전체 오류: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+def calculate_distance_haversine(lat1, lon1, lat2, lon2):
+    """하버사인 공식으로 두 지점 간 거리 계산 (미터)"""
+    try:
+        R = 6371000  # 지구 반지름(미터)
+        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+        dlat, dlon = lat2 - lat1, lon2 - lon1
+        a = math.sin(dlat/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlon/2)**2
+        return R * 2 * math.asin(math.sqrt(a))
+    except:
+        return 999999
+
 @app.get("/api/v1/stations", tags=["Station"], summary="🚀 KEPCO 2025 API - BRAND NEW")
 async def kepco_2025_new_api_implementation(
     lat: float = Query(..., description="위도 좌표", ge=-90, le=90),
@@ -480,3 +777,248 @@ async def redis_test_endpoint(redis_client: Redis = Depends(get_redis_client)):
             raise Exception("Data mismatch or retrieval failed.")
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Redis operation FAILED!: {e.__class__.__name__}: {e}")
+
+
+# --- 충전소 아이콘 클릭 → 충전기 스펙 조회 엔드포인트 ---
+@app.get("/api/v1/station/{station_id}/chargers", tags=["Station"], summary="✅ 충전기 스펙 조회 (요구사항 준수)")
+async def get_station_charger_specs(
+    station_id: str = Query(..., description="충전소ID (string 타입)"),
+    addr: str = Query(..., description="충전기주소 (string 타입)"),
+    api_key: str = Depends(frontend_api_key_required),
+    db: AsyncSession = Depends(get_async_session),
+    redis_client: Redis = Depends(get_redis_client)
+):
+    """
+    ✅ 요구사항 2번 - 충전소 아이콘 클릭 → 충전기 스펙 조회
+    
+    1. 프론트 요청: 충전소ID, 충전기주소(addr), API KEY (모두 string)
+    2. 백엔드 로직: DB검색(충전소ID) → API검색(addr) → 캐시 반영 & 동적 데이터 갱신
+    3. 응답: 충전소명칭, 제공가능한충전방식, 각 충전기 정보(상태코드+충전방식 매핑)
+    """
+    print(f"✅ 충전기 스펙 조회 시작")
+    print(f"✅ station_id={station_id}, addr={addr}")
+    
+    try:
+        # === 1단계: DB 조회 (충전소ID 활용) ===
+        print(f"✅ DB에서 충전소 정보 조회...")
+        
+        # 정적 데이터 조회
+        station_query = """
+            SELECT cs_id, cs_nm, addr, lat, longi, stat_update_datetime
+            FROM stations 
+            WHERE cs_id = :station_id
+            LIMIT 1
+        """
+        
+        station_result = await db.execute(text(station_query), {"station_id": station_id})
+        station_row = station_result.fetchone()
+        
+        if not station_row:
+            print(f"⚠️ DB에서 충전소 정보 없음, API 호출로 진행")
+            station_info = None
+        else:
+            station_dict = station_row._mapping
+            station_info = {
+                "station_id": str(station_dict["cs_id"]),
+                "station_name": str(station_dict["cs_nm"]),
+                "addr": str(station_dict["addr"]),
+                "lat": str(station_dict["lat"]),
+                "lon": str(station_dict["longi"]),
+                "last_updated": station_dict["stat_update_datetime"]
+            }
+            print(f"✅ DB에서 충전소 정보 발견: {station_info['station_name']}")
+        
+        # === 2단계: 충전기 동적 데이터 갱신 체크 (30분 규칙) ===
+        need_api_call = True
+        cached_chargers = []
+        
+        if station_info:
+            # 30분 갱신 규칙 확인
+            now = datetime.now()
+            last_update = station_info.get("last_updated")
+            
+            if last_update and isinstance(last_update, datetime):
+                time_diff = (now - last_update).total_seconds() / 60  # 분 단위
+                if time_diff <= 30:
+                    print(f"✅ 데이터가 최신임 (갱신 후 {time_diff:.1f}분), DB 데이터 사용")
+                    need_api_call = False
+                else:
+                    print(f"✅ 데이터가 오래됨 (갱신 후 {time_diff:.1f}분), API 호출 필요")
+            
+            # DB에서 충전기 정보 조회
+            if not need_api_call:
+                charger_query = """
+                    SELECT cp_id, cp_nm, cp_stat, charge_tp, cs_id
+                    FROM chargers 
+                    WHERE cs_id = :station_id
+                    ORDER BY cp_id
+                """
+                
+                charger_result = await db.execute(text(charger_query), {"station_id": station_id})
+                charger_rows = charger_result.fetchall()
+                
+                for row in charger_rows:
+                    row_dict = row._mapping
+                    cached_chargers.append({
+                        "charger_id": str(row_dict["cp_id"]),
+                        "charger_name": str(row_dict["cp_nm"]),
+                        "status_code": str(row_dict["cp_stat"]),
+                        "charge_type": str(row_dict["charge_tp"])
+                    })
+        
+        # === 3단계: API 호출 (필요시) ===
+        if need_api_call:
+            print(f"✅ KEPCO API 호출로 최신 데이터 조회...")
+            from app.core.config import settings
+            
+            kepco_url = settings.EXTERNAL_STATION_API_BASE_URL
+            kepco_key = settings.EXTERNAL_STATION_API_KEY
+            
+            if not kepco_url or not kepco_key:
+                raise HTTPException(status_code=500, detail="KEPCO API 설정 누락")
+            
+            async with httpx.AsyncClient() as client:
+                kepco_response = await client.get(
+                    kepco_url,
+                    params={
+                        "addr": addr,
+                        "apiKey": kepco_key,
+                        "returnType": "json"
+                    },
+                    timeout=30.0
+                )
+                
+                print(f"✅ KEPCO Response Status: {kepco_response.status_code}")
+                
+                if kepco_response.status_code != 200:
+                    # API 실패시 DB 데이터 사용
+                    if cached_chargers:
+                        print(f"⚠️ API 실패, 기존 DB 데이터 사용")
+                    else:
+                        raise HTTPException(
+                            status_code=502,
+                            detail=f"KEPCO API 오류: HTTP {kepco_response.status_code}"
+                        )
+                else:
+                    kepco_data = kepco_response.json()
+                    
+                    # API 데이터 처리 및 DB 저장
+                    if isinstance(kepco_data, dict) and "data" in kepco_data:
+                        raw_data = kepco_data["data"]
+                        updated_chargers = []
+                        now = datetime.now()
+                        
+                        if isinstance(raw_data, list):
+                            for item in raw_data:
+                                try:
+                                    if str(item.get("csId", "")) == station_id:
+                                        # 충전소 정보 업데이트
+                                        if not station_info:
+                                            station_info = {
+                                                "station_id": str(item.get("csId", "")),
+                                                "station_name": str(item.get("csNm", "")),
+                                                "addr": str(item.get("addr", "")),
+                                                "lat": str(item.get("lat", "")),
+                                                "lon": str(item.get("longi", ""))
+                                            }
+                                        
+                                        # 충전기 정보 수집
+                                        charger_data = {
+                                            "charger_id": str(item.get("cpId", "")),
+                                            "charger_name": str(item.get("cpNm", "")),
+                                            "status_code": str(item.get("cpStat", "")),
+                                            "charge_type": str(item.get("chargeTp", ""))
+                                        }
+                                        updated_chargers.append(charger_data)
+                                        
+                                        # DB에 저장 (동적 데이터 갱신)
+                                        try:
+                                            # 충전기 정보 저장/업데이트
+                                            charger_insert_sql = """
+                                                INSERT INTO chargers (cp_id, cp_nm, cp_stat, charge_tp, cs_id, stat_update_datetime)
+                                                VALUES (:cp_id, :cp_nm, :cp_stat, :charge_tp, :cs_id, :update_time)
+                                                ON CONFLICT (cp_id) DO UPDATE SET
+                                                    cp_nm = EXCLUDED.cp_nm,
+                                                    cp_stat = EXCLUDED.cp_stat,
+                                                    charge_tp = EXCLUDED.charge_tp,
+                                                    stat_update_datetime = EXCLUDED.stat_update_datetime
+                                            """
+                                            await db.execute(text(charger_insert_sql), {
+                                                "cp_id": item.get("cpId"),
+                                                "cp_nm": item.get("cpNm"),
+                                                "cp_stat": item.get("cpStat"),
+                                                "charge_tp": item.get("chargeTp"),
+                                                "cs_id": item.get("csId"),
+                                                "update_time": now
+                                            })
+                                        except Exception as db_error:
+                                            print(f"⚠️ 충전기 DB 저장 오류: {db_error}")
+                                
+                                except Exception as item_error:
+                                    print(f"⚠️ 충전기 데이터 처리 오류: {item_error}")
+                                    continue
+                        
+                        # 트랜잭션 커밋
+                        await db.commit()
+                        cached_chargers = updated_chargers
+                        print(f"✅ 충전기 정보 DB 저장 완료: {len(updated_chargers)}개")
+        
+        # === 4단계: 응답 데이터 구성 ===
+        if not station_info:
+            raise HTTPException(status_code=404, detail="충전소 정보를 찾을 수 없습니다.")
+        
+        # 제공 가능한 충전방식 추출
+        available_charge_types = list(set([
+            charger["charge_type"] for charger in cached_chargers 
+            if charger["charge_type"]
+        ]))
+        
+        # 각 충전기 정보 (상태코드 + 충전방식 매핑)
+        charger_details = []
+        for charger in cached_chargers:
+            # 상태코드 해석
+            status_code = charger["status_code"]
+            status_text = {
+                "1": "충전가능",
+                "2": "충전중", 
+                "3": "고장/점검",
+                "4": "통신장애",
+                "5": "통신미연결"
+            }.get(status_code, f"알 수 없음({status_code})")
+            
+            charger_details.append({
+                "charger_id": charger["charger_id"],
+                "charger_name": charger["charger_name"],
+                "status_code": status_code,
+                "status_text": status_text,
+                "charge_type": charger["charge_type"]
+            })
+        
+        # === 5단계: Cache 저장 ===
+        try:
+            cache_key = f"station_detail:{station_id}"
+            cache_data = {
+                "station_info": station_info,
+                "chargers": charger_details,
+                "available_charge_types": available_charge_types,
+                "timestamp": datetime.now().isoformat()
+            }
+            await redis_client.setex(cache_key, 1800, json.dumps(cache_data, ensure_ascii=False))  # 30분 캐시
+            print(f"✅ 충전소 상세 정보 Cache 저장 완료")
+        except Exception as cache_error:
+            print(f"⚠️ Cache 저장 오류: {cache_error}")
+        
+        return {
+            "station_name": station_info["station_name"],
+            "available_charge_types": ", ".join(available_charge_types),
+            "charger_details": charger_details,
+            "total_chargers": len(charger_details),
+            "source": "api" if need_api_call else "database",
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"🚨 충전기 스펙 조회 오류: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
