@@ -11,6 +11,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
+from sqlalchemy.exc import ProgrammingError
 from redis.asyncio import Redis
 import httpx
 import math
@@ -499,6 +500,9 @@ async def search_ev_stations_requirement_compliant(
                         
                         # DB에 저장 (정적 데이터)
                         try:
+                            # Ensure we are not in an aborted transaction from an earlier error
+                            await _clear_db_transaction(db)
+
                             # Use PostGIS location column. Some DBs don't have lat/long columns.
                             insert_sql = """
                                 INSERT INTO stations (cs_id, address, name, location, raw_data, stat_update_datetime)
@@ -522,7 +526,7 @@ async def search_ev_stations_requirement_compliant(
                         except Exception as insert_error:
                             # If insert fails, rollback so the session is usable for later operations
                             try:
-                                await db.rollback()
+                                await _clear_db_transaction(db)
                             except Exception:
                                 pass
                             print(f"⚠️ DB 저장 오류: {insert_error}")
@@ -539,14 +543,19 @@ async def search_ev_stations_requirement_compliant(
         api_stations.sort(key=lambda x: calculate_distance_haversine(
             lat_float, lon_float, float(x["lat"]), float(x["lon"])
         ))
-        
+        # Deduplicate stations by station_id before caching/returning
+        try:
+            api_stations = _dedupe_stations_by_id(api_stations)
+        except Exception:
+            pass
+
         try:
             cache_data = {"stations": api_stations, "timestamp": now.isoformat()}
             await redis_client.setex(cache_key, 3600, json.dumps(cache_data, ensure_ascii=False))
             print(f"✅ API 결과 Cache 저장 완료")
         except:
             pass
-        
+
         return {
             "source": "kepco_api",
             "addr": addr,
@@ -571,6 +580,61 @@ def calculate_distance_haversine(lat1, lon1, lat2, lon2):
         return R * 2 * math.asin(math.sqrt(a))
     except:
         return 999999
+
+
+def _dedupe_stations_by_id(stations):
+    """Deduplicate station dicts by station_id.
+
+    - stations: list of dicts that must contain 'station_id' (string)
+    - Returns a list preserving the first-seen station for each id but
+      merges charger lists if present.
+    """
+    by_id = {}
+    for s in stations:
+        sid = str(s.get("station_id", "")).strip()
+        if not sid:
+            # keep as-is (no id) using a generated key
+            key = f"_noid_{len(by_id)}"
+            by_id[key] = s
+            continue
+
+        if sid not in by_id:
+            # shallow copy to avoid mutating input
+            by_id[sid] = dict(s)
+        else:
+            # merge non-empty fields
+            existing = by_id[sid]
+            for k, v in s.items():
+                if k == "chargers":
+                    # merge charger lists uniquely by charger_id
+                    existing_ch = existing.get("chargers") or []
+                    new_ch = v or []
+                    seen = {c.get("charger_id") for c in existing_ch}
+                    for c in new_ch:
+                        if c.get("charger_id") not in seen:
+                            existing_ch.append(c)
+                            seen.add(c.get("charger_id"))
+                    existing["chargers"] = existing_ch
+                else:
+                    # prefer existing non-empty value, otherwise take new
+                    if not existing.get(k) and v:
+                        existing[k] = v
+
+    return list(by_id.values())
+
+
+async def _clear_db_transaction(db: AsyncSession):
+    """Ensure the DB session is not in an aborted transaction state.
+
+    Calling rollback when no transaction is active is harmless; this
+    is a defensive helper used before attempting writes so we don't
+    hit InFailedSQLTransactionError caused by a prior failure.
+    """
+    try:
+        await db.rollback()
+    except Exception:
+        # swallow - best effort only
+        pass
 
 @app.get("/api/v1/stations", tags=["Station"], summary="🚀 KEPCO 2025 API - BRAND NEW")
 async def kepco_2025_new_api_implementation(
@@ -688,6 +752,12 @@ async def kepco_2025_new_api_implementation(
                         print(f"🚨 Item processing error: {item_error}")
                         continue
         
+        # Deduplicate stations by station_id then sort and return
+        try:
+            stations = _dedupe_stations_by_id(stations)
+        except Exception:
+            pass
+
         # 결과 정렬 및 반환
         stations.sort(key=lambda x: x["distance_m"])
         final_result = stations[:limit]
@@ -820,26 +890,63 @@ async def get_station_charger_specs(
         print(f"✅ DB에서 충전소 정보 조회...")
         
         # 정적 데이터 조회
-        # NOTE: avoid referencing potentially-missing KEPCO-specific columns directly.
-        # Select stable columns and map them into the expected keys.
-        station_query = """
+        # Try a richer query that uses `static_data_updated_at` if present; if the
+        # column is missing (ProgrammingError) fallback to a simpler query. Also
+        # ensure we rollback any aborted transaction before retrying.
+        primary_station_query = """
             SELECT cs_id, COALESCE(name, '') AS cs_nm, COALESCE(address, '') AS addr,
-                   ST_Y(location)::text AS lat, ST_X(location)::text AS longi, stat_update_datetime
-            FROM stations 
+                   ST_Y(location)::text AS lat, ST_X(location)::text AS longi,
+                   COALESCE(static_data_updated_at, updated_at) AS last_updated
+            FROM stations
             WHERE cs_id = :station_id
             LIMIT 1
         """
+
+        fallback_station_query = """
+            SELECT cs_id, COALESCE(name, '') AS cs_nm, COALESCE(address, '') AS addr,
+                   ST_Y(location)::text AS lat, ST_X(location)::text AS longi,
+                   updated_at AS last_updated
+            FROM stations
+            WHERE cs_id = :station_id
+            LIMIT 1
+        """
+
+        station_row = None
         try:
-            station_result = await db.execute(text(station_query), {"station_id": station_id})
-            station_row = station_result.fetchone()
-        except Exception as station_db_error:
-            # rollback so the session is usable for later DB operations
             try:
-                await db.rollback()
+                station_result = await db.execute(text(primary_station_query), {"station_id": station_id})
+                station_row = station_result.fetchone()
+            except ProgrammingError as pe:
+                # Column missing or other programming error — clear transaction and retry with fallback
+                try:
+                    await _clear_db_transaction(db)
+                except Exception:
+                    pass
+                print(f"⚠️ Primary station query ProgrammingError, falling back: {pe}")
+                try:
+                    station_result = await db.execute(text(fallback_station_query), {"station_id": station_id})
+                    station_row = station_result.fetchone()
+                except Exception as fallback_err:
+                    try:
+                        await _clear_db_transaction(db)
+                    except Exception:
+                        pass
+                    print(f"⚠️ Fallback station query failed: {fallback_err}")
+                    station_row = None
+            except Exception as station_db_error:
+                # Other DB error: clear and continue
+                try:
+                    await _clear_db_transaction(db)
+                except Exception:
+                    pass
+                print(f"⚠️ DB 조회 오류(충전소 상세): {station_db_error}")
+                station_row = None
+        finally:
+            # ensure we aren't leaving an aborted transaction open
+            try:
+                await _clear_db_transaction(db)
             except Exception:
                 pass
-            print(f"⚠️ DB 조회 오류(충전소 상세): {station_db_error}")
-            station_row = None
         
         if not station_row:
             print(f"⚠️ DB에서 충전소 정보 없음, API 호출로 진행")
@@ -971,6 +1078,12 @@ async def get_station_charger_specs(
                                                     charge_tp = EXCLUDED.charge_tp,
                                                     stat_update_datetime = EXCLUDED.stat_update_datetime
                                             """
+                                            # make sure any prior aborted transaction is cleared
+                                            try:
+                                                await _clear_db_transaction(db)
+                                            except Exception:
+                                                pass
+
                                             await db.execute(text(charger_insert_sql), {
                                                 "cp_id": item.get("cpId"),
                                                 "cp_nm": item.get("cpNm"),
