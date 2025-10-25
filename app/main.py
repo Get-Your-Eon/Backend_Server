@@ -1125,15 +1125,18 @@ async def get_station_charger_specs(
                                             except Exception:
                                                 pass
 
-                                            await db.execute(text(charger_insert_sql), {
-                                                "station_id": station_db_id,
-                                                "cp_id": item.get("cpId"),
-                                                "cp_nm": item.get("cpNm"),
-                                                "cp_stat": item.get("cpStat"),
-                                                "charge_tp": item.get("chargeTp"),
-                                                "cs_id": item.get("csId"),
-                                                "update_time": now
-                                            })
+                                            if station_db_id is not None:
+                                                await db.execute(text(charger_insert_sql), {
+                                                    "station_id": station_db_id,
+                                                    "cp_id": item.get("cpId"),
+                                                    "cp_nm": item.get("cpNm"),
+                                                    "cp_stat": item.get("cpStat"),
+                                                    "charge_tp": item.get("chargeTp"),
+                                                    "cs_id": item.get("csId"),
+                                                    "update_time": now
+                                                })
+                                            else:
+                                                print(f"⚠️ 충전기 DB 저장 스킵: station DB id를 찾을 수 없음 for csId={item.get('csId')}")
                                         except Exception as db_error:
                                             try:
                                                 await db.rollback()
