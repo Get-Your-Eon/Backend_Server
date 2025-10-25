@@ -407,9 +407,16 @@ async def search_ev_stations_requirement_compliant(
                         continue
                 
                 if db_result:
+                    # sort by distance (and log a small sample for debugging radius handling)
                     db_result.sort(key=lambda x: calculate_distance_haversine(
                         lat_float, lon_float, float(x["lat"]), float(x["lon"])
                     ))
+                    try:
+                        distances = [int(calculate_distance_haversine(lat_float, lon_float, float(x["lat"]), float(x["lon"]))) for x in db_result]
+                        sample = distances[:10]
+                        print(f"🔍 Debug distances sample (meters): count={len(distances)} sample={sample}")
+                    except Exception as _dist_err:
+                        print(f"⚠️ 거리 디버그 생성 실패: {_dist_err}")
                     
                     # Cache에 저장
                     try:
@@ -894,25 +901,25 @@ async def get_station_charger_specs(
         # column is missing (ProgrammingError) fallback to a simpler query. Also
         # ensure we rollback any aborted transaction before retrying.
         primary_station_query = """
-            SELECT cs_id, COALESCE(name, '') AS cs_nm, COALESCE(address, '') AS addr,
-                   ST_Y(location)::text AS lat, ST_X(location)::text AS longi,
-                   COALESCE(static_data_updated_at, updated_at) AS last_updated,
-                   -- most recent charger dynamic update time for this station
-                   (SELECT MAX(stat_update_datetime) FROM chargers WHERE cs_id = stations.cs_id) AS last_charger_update
-            FROM stations
-            WHERE cs_id = :station_id
-            LIMIT 1
-        """
+         SELECT id as station_db_id, cs_id, COALESCE(name, '') AS cs_nm, COALESCE(address, '') AS addr,
+             ST_Y(location)::text AS lat, ST_X(location)::text AS longi,
+             COALESCE(static_data_updated_at, updated_at) AS last_updated,
+             -- most recent charger dynamic update time for this station
+             (SELECT MAX(stat_update_datetime) FROM chargers WHERE cs_id = stations.cs_id) AS last_charger_update
+         FROM stations
+         WHERE cs_id = :station_id
+         LIMIT 1
+     """
 
         fallback_station_query = """
-            SELECT cs_id, COALESCE(name, '') AS cs_nm, COALESCE(address, '') AS addr,
-                   ST_Y(location)::text AS lat, ST_X(location)::text AS longi,
-                   updated_at AS last_updated,
-                   (SELECT MAX(stat_update_datetime) FROM chargers WHERE cs_id = stations.cs_id) AS last_charger_update
-            FROM stations
-            WHERE cs_id = :station_id
-            LIMIT 1
-        """
+         SELECT id as station_db_id, cs_id, COALESCE(name, '') AS cs_nm, COALESCE(address, '') AS addr,
+             ST_Y(location)::text AS lat, ST_X(location)::text AS longi,
+             updated_at AS last_updated,
+             (SELECT MAX(stat_update_datetime) FROM chargers WHERE cs_id = stations.cs_id) AS last_charger_update
+         FROM stations
+         WHERE cs_id = :station_id
+         LIMIT 1
+     """
 
         station_row = None
         try:
@@ -966,6 +973,7 @@ async def get_station_charger_specs(
                     return None
 
             station_info = {
+                "station_db_id": station_dict.get("station_db_id"),
                 "station_id": str(station_dict["cs_id"]),
                 "station_name": str(station_dict["cs_nm"]),
                 "addr": str(station_dict["addr"]),
@@ -999,7 +1007,7 @@ async def get_station_charger_specs(
             # If DB is fresh, load charger rows to return
             if not need_api_call:
                 charger_query = """
-                    SELECT cp_id, cp_nm, cp_stat, charge_tp, cs_id
+                    SELECT station_id, cp_id, cp_nm, cp_stat, charge_tp, cs_id, stat_update_datetime
                     FROM chargers 
                     WHERE cs_id = :station_id
                     ORDER BY cp_id
@@ -1010,11 +1018,16 @@ async def get_station_charger_specs(
 
                 for row in charger_rows:
                     row_dict = row._mapping
+                    # normalize stat_update_datetime to ISO if present
+                    sdt = row_dict.get("stat_update_datetime")
+                    sdt_iso = sdt.isoformat() if isinstance(sdt, datetime) else sdt
                     cached_chargers.append({
                         "charger_id": str(row_dict["cp_id"]),
                         "charger_name": str(row_dict["cp_nm"]),
-                        "status_code": str(row_dict["cp_stat"]),
-                        "charge_type": str(row_dict["charge_tp"])
+                        "status_code": str(row_dict.get("cp_stat") or ""),
+                        "charge_type": str(row_dict.get("charge_tp") or ""),
+                        "stat_update_datetime": sdt_iso,
+                        "station_db_id": row_dict.get("station_id")
                     })
         
         # === 3단계: API 호출 (필요시) ===
@@ -1084,10 +1097,23 @@ async def get_station_charger_specs(
 
                                         # DB에 저장 (동적 데이터 갱신) - set stat_update_datetime to now
                                         try:
+                                            # ensure we have the station DB primary key to satisfy chargers.station_id NOT NULL
+                                            station_db_id = station_info.get("station_db_id") if station_info else None
+                                            if not station_db_id:
+                                                # try to lookup station DB id by cs_id
+                                                try:
+                                                    sid_res = await db.execute(text("SELECT id FROM stations WHERE cs_id = :cs_id LIMIT 1"), {"cs_id": item.get("csId")})
+                                                    sid_row = sid_res.fetchone()
+                                                    if sid_row:
+                                                        station_db_id = sid_row._mapping.get("id")
+                                                except Exception:
+                                                    station_db_id = None
+
                                             charger_insert_sql = """
-                                                INSERT INTO chargers (cp_id, cp_nm, cp_stat, charge_tp, cs_id, stat_update_datetime)
-                                                VALUES (:cp_id, :cp_nm, :cp_stat, :charge_tp, :cs_id, :update_time)
+                                                INSERT INTO chargers (station_id, cp_id, cp_nm, cp_stat, charge_tp, cs_id, stat_update_datetime)
+                                                VALUES (:station_id, :cp_id, :cp_nm, :cp_stat, :charge_tp, :cs_id, :update_time)
                                                 ON CONFLICT (cp_id) DO UPDATE SET
+                                                    station_id = COALESCE(EXCLUDED.station_id, chargers.station_id),
                                                     cp_nm = EXCLUDED.cp_nm,
                                                     cp_stat = EXCLUDED.cp_stat,
                                                     charge_tp = EXCLUDED.charge_tp,
@@ -1100,6 +1126,7 @@ async def get_station_charger_specs(
                                                 pass
 
                                             await db.execute(text(charger_insert_sql), {
+                                                "station_id": station_db_id,
                                                 "cp_id": item.get("cpId"),
                                                 "cp_nm": item.get("cpNm"),
                                                 "cp_stat": item.get("cpStat"),
