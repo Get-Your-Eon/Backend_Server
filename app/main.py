@@ -896,7 +896,9 @@ async def get_station_charger_specs(
         primary_station_query = """
             SELECT cs_id, COALESCE(name, '') AS cs_nm, COALESCE(address, '') AS addr,
                    ST_Y(location)::text AS lat, ST_X(location)::text AS longi,
-                   COALESCE(static_data_updated_at, updated_at) AS last_updated
+                   COALESCE(static_data_updated_at, updated_at) AS last_updated,
+                   -- most recent charger dynamic update time for this station
+                   (SELECT MAX(stat_update_datetime) FROM chargers WHERE cs_id = stations.cs_id) AS last_charger_update
             FROM stations
             WHERE cs_id = :station_id
             LIMIT 1
@@ -905,7 +907,8 @@ async def get_station_charger_specs(
         fallback_station_query = """
             SELECT cs_id, COALESCE(name, '') AS cs_nm, COALESCE(address, '') AS addr,
                    ST_Y(location)::text AS lat, ST_X(location)::text AS longi,
-                   updated_at AS last_updated
+                   updated_at AS last_updated,
+                   (SELECT MAX(stat_update_datetime) FROM chargers WHERE cs_id = stations.cs_id) AS last_charger_update
             FROM stations
             WHERE cs_id = :station_id
             LIMIT 1
@@ -953,34 +956,47 @@ async def get_station_charger_specs(
             station_info = None
         else:
             station_dict = station_row._mapping
+            # Normalize any datetime-like fields to ISO strings to make caching/JSON safe
+            def _dt_to_iso(val):
+                try:
+                    if isinstance(val, datetime):
+                        return val.isoformat()
+                    return val
+                except Exception:
+                    return None
+
             station_info = {
                 "station_id": str(station_dict["cs_id"]),
                 "station_name": str(station_dict["cs_nm"]),
                 "addr": str(station_dict["addr"]),
                 "lat": str(station_dict["lat"]),
                 "lon": str(station_dict["longi"]),
-                "last_updated": station_dict["stat_update_datetime"]
+                "last_updated": _dt_to_iso(station_dict.get("stat_update_datetime")),
+                # charger-level latest dynamic timestamp (may be None)
+                "last_charger_update": _dt_to_iso(station_dict.get("last_charger_update"))
             }
             print(f"✅ DB에서 충전소 정보 발견: {station_info['station_name']}")
         
         # === 2단계: 충전기 동적 데이터 갱신 체크 (30분 규칙) ===
         need_api_call = True
         cached_chargers = []
-        
+
         if station_info:
-            # 30분 갱신 규칙 확인
+            # Use the latest charger-level update timestamp (not static station timestamp)
             now = datetime.now()
-            last_update = station_info.get("last_updated")
-            
-            if last_update and isinstance(last_update, datetime):
-                time_diff = (now - last_update).total_seconds() / 60  # 분 단위
+            last_charger_update = station_info.get("last_charger_update")
+
+            if last_charger_update and isinstance(last_charger_update, datetime):
+                time_diff = (now - last_charger_update).total_seconds() / 60  # 분 단위
                 if time_diff <= 30:
-                    print(f"✅ 데이터가 최신임 (갱신 후 {time_diff:.1f}분), DB 데이터 사용")
+                    print(f"✅ 충전기 데이터가 최신임 (갱신 후 {time_diff:.1f}분), DB의 동적 데이터 사용")
                     need_api_call = False
                 else:
-                    print(f"✅ 데이터가 오래됨 (갱신 후 {time_diff:.1f}분), API 호출 필요")
-            
-            # DB에서 충전기 정보 조회
+                    print(f"✅ 충전기 데이터가 오래됨 (갱신 후 {time_diff:.1f}분), API 호출 필요")
+            else:
+                print("✅ 충전기 최신 업데이트 없음(첫 조회 또는 DB에 충전기 데이터 없음), API 호출 필요")
+
+            # If DB is fresh, load charger rows to return
             if not need_api_call:
                 charger_query = """
                     SELECT cp_id, cp_nm, cp_stat, charge_tp, cs_id
@@ -988,10 +1004,10 @@ async def get_station_charger_specs(
                     WHERE cs_id = :station_id
                     ORDER BY cp_id
                 """
-                
+
                 charger_result = await db.execute(text(charger_query), {"station_id": station_id})
                 charger_rows = charger_result.fetchall()
-                
+
                 for row in charger_rows:
                     row_dict = row._mapping
                     cached_chargers.append({
@@ -1056,8 +1072,8 @@ async def get_station_charger_specs(
                                                 "lat": str(item.get("lat", "")),
                                                 "lon": str(item.get("longi", ""))
                                             }
-                                        
-                                        # 충전기 정보 수집
+
+                                        # 충전기 정보 수집 (we'll respond with these freshly fetched statuses)
                                         charger_data = {
                                             "charger_id": str(item.get("cpId", "")),
                                             "charger_name": str(item.get("cpNm", "")),
@@ -1065,10 +1081,9 @@ async def get_station_charger_specs(
                                             "charge_type": str(item.get("chargeTp", ""))
                                         }
                                         updated_chargers.append(charger_data)
-                                        
-                                        # DB에 저장 (동적 데이터 갱신)
+
+                                        # DB에 저장 (동적 데이터 갱신) - set stat_update_datetime to now
                                         try:
-                                            # 충전기 정보 저장/업데이트
                                             charger_insert_sql = """
                                                 INSERT INTO chargers (cp_id, cp_nm, cp_stat, charge_tp, cs_id, stat_update_datetime)
                                                 VALUES (:cp_id, :cp_nm, :cp_stat, :charge_tp, :cs_id, :update_time)
@@ -1078,7 +1093,7 @@ async def get_station_charger_specs(
                                                     charge_tp = EXCLUDED.charge_tp,
                                                     stat_update_datetime = EXCLUDED.stat_update_datetime
                                             """
-                                            # make sure any prior aborted transaction is cleared
+                                            # clear any prior aborted transaction
                                             try:
                                                 await _clear_db_transaction(db)
                                             except Exception:
@@ -1093,21 +1108,20 @@ async def get_station_charger_specs(
                                                 "update_time": now
                                             })
                                         except Exception as db_error:
-                                            # Rollback to clear aborted transaction state
                                             try:
                                                 await db.rollback()
                                             except Exception:
                                                 pass
                                             print(f"⚠️ 충전기 DB 저장 오류: {db_error}")
-                                
                                 except Exception as item_error:
                                     print(f"⚠️ 충전기 데이터 처리 오류: {item_error}")
                                     continue
                         
                         # 트랜잭션 커밋
                         await db.commit()
+                        # After successful update, respond using freshly fetched charger statuses
                         cached_chargers = updated_chargers
-                        print(f"✅ 충전기 정보 DB 저장 완료: {len(updated_chargers)}개")
+                        print(f"✅ 충전기 정보 DB 저장 완료: {len(updated_chargers)}개 (fresh)")
         
         # === 4단계: 응답 데이터 구성 ===
         if not station_info:
