@@ -1061,6 +1061,10 @@ async def get_station_charger_specs(
                 except Exception:
                     return None
 
+            # Preserve the raw DB datetime for charger-level latest update so we
+            # can perform accurate freshness comparisons (avoid converting to
+            # ISO string too early). We still present ISO strings when caching
+            # or returning JSON, but internal logic uses datetime objects.
             station_info = {
                 "station_db_id": station_dict.get("station_db_id"),
                 "station_id": str(station_dict["cs_id"]),
@@ -1068,9 +1072,10 @@ async def get_station_charger_specs(
                 "addr": str(station_dict["addr"]),
                 "lat": str(station_dict["lat"]),
                 "lon": str(station_dict["longi"]),
+                # keep last_updated as ISO for informational purposes
                 "last_updated": _dt_to_iso(station_dict.get("stat_update_datetime")),
-                # charger-level latest dynamic timestamp (may be None)
-                "last_charger_update": _dt_to_iso(station_dict.get("last_charger_update"))
+                # keep raw DB value (may be datetime or string) for freshness check
+                "last_charger_update": station_dict.get("last_charger_update")
             }
             print(f"✅ DB에서 충전소 정보 발견: {station_info['station_name']}")
         
@@ -1083,15 +1088,28 @@ async def get_station_charger_specs(
             now = datetime.now()
             last_charger_update = station_info.get("last_charger_update")
 
-            if last_charger_update and isinstance(last_charger_update, datetime):
-                time_diff = (now - last_charger_update).total_seconds() / 60  # 분 단위
+            # Normalize last_charger_update into a datetime object if possible.
+            last_charger_update_dt = None
+            if last_charger_update:
+                if isinstance(last_charger_update, datetime):
+                    last_charger_update_dt = last_charger_update
+                else:
+                    # If DB layer returned a string (ISO) try to parse it.
+                    try:
+                        last_charger_update_dt = datetime.fromisoformat(str(last_charger_update))
+                    except Exception:
+                        # Could not parse — leave as None which triggers API call
+                        last_charger_update_dt = None
+
+            if last_charger_update_dt:
+                time_diff = (now - last_charger_update_dt).total_seconds() / 60  # 분 단위
                 if time_diff <= 30:
                     print(f"✅ 충전기 데이터가 최신임 (갱신 후 {time_diff:.1f}분), DB의 동적 데이터 사용")
                     need_api_call = False
                 else:
                     print(f"✅ 충전기 데이터가 오래됨 (갱신 후 {time_diff:.1f}분), API 호출 필요")
             else:
-                print("✅ 충전기 최신 업데이트 없음(첫 조회 또는 DB에 충전기 데이터 없음), API 호출 필요")
+                print("✅ 충전기 최신 업데이트 없음(첫 조회 또는 DB에 충전기 데이터 없음 또는 파싱 실패), API 호출 필요")
 
             # If DB is fresh, load charger rows to return
             if not need_api_call:
