@@ -327,7 +327,8 @@ async def search_ev_stations_requirement_compliant(
         # caused by address tokenization differences. Round to 4 decimal places (~11m)
         lat_round = round(lat_float, 4)
         lon_round = round(lon_float, 4)
-        cache_key = f"stations:{addr}:{actual_radius}:{lat_round}:{lon_round}"
+        # Use coordinate-first key (avoid addr text differences)
+        cache_key = f"stations:lat{lat_round}:lon{lon_round}:r{actual_radius}"
         
         try:
             cached_data = await redis_client.get(cache_key)
@@ -374,7 +375,9 @@ async def search_ev_stations_requirement_compliant(
                     COALESCE(address, '') as addr,
                     COALESCE(name, '') as station_name,
                     ST_Y(location)::text as lat,
-                    ST_X(location)::text as lon
+                    ST_X(location)::text as lon,
+                    -- compute distance in meters on DB side for accurate ordering/filtering
+                    ROUND(ST_Distance(location::geography, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography))::int as distance_m
                 FROM stations
                 WHERE location IS NOT NULL
                   AND ST_DWithin(
@@ -382,7 +385,7 @@ async def search_ev_stations_requirement_compliant(
                       ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
                       :radius_m
                   )
-                ORDER BY cs_id
+                ORDER BY distance_m
                 LIMIT 100
             """
 
@@ -393,24 +396,30 @@ async def search_ev_stations_requirement_compliant(
                     COALESCE(address, '') as addr,
                     COALESCE(name, '') as station_name,
                     ST_Y(location)::text as lat,
-                    ST_X(location)::text as lon
+                    ST_X(location)::text as lon,
+                    ROUND(ST_Distance(location::geography, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography))::int as distance_m
                 FROM stations
                 WHERE (COALESCE(address, '') LIKE :addr_pattern OR COALESCE(name, '') LIKE :addr_pattern)
                 AND location IS NOT NULL
-                ORDER BY cs_id
+                ORDER BY distance_m
                 LIMIT 100
             """
 
             try:
+                # pass the normalized radius to the spatial query
                 result = await db.execute(
                     text(spatial_query),
-                    {"lon": lon_float, "lat": lat_float, "radius_m": radius}
+                    {"lon": lon_float, "lat": lat_float, "radius_m": actual_radius}
                 )
             except Exception:
                 # If spatial query fails (no PostGIS or column differences), fallback
                 result = await db.execute(
                     text(fallback_name_query),
-                    {"addr_pattern": f"%{addr.split()[0] if addr else '서울'}%"}
+                    {
+                        "addr_pattern": f"%{addr.split()[0] if addr else '서울'}%",
+                        "lon": lon_float,
+                        "lat": lat_float
+                    }
                 )
             db_stations = result.fetchall()
             
@@ -421,12 +430,16 @@ async def search_ev_stations_requirement_compliant(
                 for row in db_stations:
                     try:
                         row_dict = row._mapping
-                        dist = calculate_distance_haversine(
-                            lat_float, lon_float,
-                            float(row_dict["lat"]), float(row_dict["lon"])
-                        )
-                        
-                        if dist <= radius:
+                        # prefer DB-calculated distance_m when available (faster and consistent)
+                        db_distance = row_dict.get("distance_m")
+                        try:
+                            dist_val = int(db_distance) if db_distance is not None else int(calculate_distance_haversine(
+                                lat_float, lon_float, float(row_dict["lat"]), float(row_dict["lon"])
+                            ))
+                        except Exception:
+                            dist_val = int(calculate_distance_haversine(lat_float, lon_float, float(row_dict["lat"]), float(row_dict["lon"])))
+
+                        if dist_val <= radius:
                             db_result.append({
                                 "station_id": str(row_dict["station_id"]),
                                 "addr": str(row_dict["addr"]),
@@ -434,7 +447,7 @@ async def search_ev_stations_requirement_compliant(
                                 "lat": str(row_dict["lat"]),
                                 "lon": str(row_dict["lon"]),
                                 # ensure distance is returned as string (frontend expects string)
-                                "distance_m": str(int(dist))
+                                "distance_m": str(int(dist_val))
                             })
                     except Exception as row_error:
                         print(f"⚠️ DB row 처리 오류: {row_error}")
@@ -454,9 +467,13 @@ async def search_ev_stations_requirement_compliant(
                     
                     # Cache에 저장
                     try:
-                        cache_data = {"stations": db_result, "timestamp": datetime.now().isoformat()}
-                        await redis_client.setex(cache_key, 3600, json.dumps(cache_data, ensure_ascii=False))
-                        print(f"✅ DB 결과 Cache 저장 완료")
+                        # don't cache empty results
+                        if db_result:
+                            cache_data = {"stations": db_result, "timestamp": datetime.now().isoformat()}
+                            await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(cache_data, ensure_ascii=False))
+                            print(f"✅ DB 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
+                        else:
+                            print(f"ℹ️ DB 결과 빈 리스트 - 캐시 저장 생략: key={cache_key}")
                     except Exception as _c_err:
                         print(f"⚠️ Cache 저장 실패: {_c_err}")
                         pass
@@ -593,10 +610,15 @@ async def search_ev_stations_requirement_compliant(
             pass
 
         try:
-            cache_data = {"stations": api_stations, "timestamp": now.isoformat()}
-            await redis_client.setex(cache_key, 3600, json.dumps(cache_data, ensure_ascii=False))
-            print(f"✅ API 결과 Cache 저장 완료")
-        except:
+            # Avoid caching empty API results
+            if api_stations:
+                cache_data = {"stations": api_stations, "timestamp": now.isoformat()}
+                await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(cache_data, ensure_ascii=False))
+                print(f"✅ API 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
+            else:
+                print(f"ℹ️ API 결과 빈 리스트 - 캐시 저장 생략: key={cache_key}")
+        except Exception as _c_err:
+            print(f"⚠️ API 캐시 저장 실패: {_c_err}")
             pass
 
         return {
