@@ -1078,7 +1078,46 @@ async def get_station_charger_specs(
                 "last_charger_update": station_dict.get("last_charger_update")
             }
             print(f"✅ DB에서 충전소 정보 발견: {station_info['station_name']}")
-        
+
+        # === Redis 캐시 우선 검사 (30분 이내인 경우 바로 반환) ===
+        try:
+            cache_key = f"station_detail:{station_id}"
+            cached_blob = None
+            if redis_client:
+                cached_raw = await redis_client.get(cache_key)
+                if cached_raw:
+                    try:
+                        cached_blob = json.loads(cached_raw)
+                    except Exception:
+                        cached_blob = None
+
+            if cached_blob and isinstance(cached_blob, dict) and cached_blob.get("timestamp"):
+                # try parse timestamp and determine age in minutes
+                try:
+                    cached_ts = datetime.fromisoformat(str(cached_blob.get("timestamp")))
+                    age_min = (datetime.now() - cached_ts).total_seconds() / 60
+                    if age_min <= 30:
+                        print(f"✅ Redis 캐시 사용: station_detail:{station_id} age={age_min:.1f}min")
+                        # normalize cached payload to the endpoint response shape
+                        cached_station_info = cached_blob.get("station_info") or {}
+                        cached_chargers = cached_blob.get("chargers") or []
+                        cached_available = cached_blob.get("available_charge_types") or []
+                        resp = {
+                            "station_name": cached_station_info.get("station_name") or cached_station_info.get("cs_nm") or "",
+                            "available_charge_types": ", ".join(cached_available),
+                            "charger_details": cached_chargers,
+                            "total_chargers": len(cached_chargers),
+                            "source": "cache",
+                            "timestamp": cached_blob.get("timestamp")
+                        }
+                        return JSONResponse(status_code=200, content=resp)
+                    else:
+                        print(f"ℹ️ Redis 캐시 존재하지만 만료 기준 초과(age={age_min:.1f}min) - API/DB 검사 진행")
+                except Exception:
+                    print("⚠️ Redis 캐시의 timestamp 파싱 실패 - 무시하고 API/DB 검사 진행")
+        except Exception as cache_err:
+            print(f"⚠️ Redis 조회 오류(무시): {cache_err}")
+
         # === 2단계: 충전기 동적 데이터 갱신 체크 (30분 규칙) ===
         need_api_call = True
         cached_chargers = []
@@ -1320,12 +1359,15 @@ async def get_station_charger_specs(
         except Exception as cache_error:
             print(f"⚠️ Cache 저장 오류: {cache_error}")
         
+        # Explicitly mark where the data came from so frontend can display/diagnose
+        response_source = "api" if need_api_call else "database"
+
         return {
             "station_name": station_info["station_name"],
             "available_charge_types": ", ".join(available_charge_types),
             "charger_details": charger_details,
             "total_chargers": len(charger_details),
-            "source": "api" if need_api_call else "database",
+            "source": response_source,
             "timestamp": datetime.now().isoformat()
         }
         
