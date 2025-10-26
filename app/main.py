@@ -1198,15 +1198,26 @@ async def get_station_charger_specs(
                                                 except Exception:
                                                     station_db_id = None
 
+                                            # determine provider-side timestamp (if any) from API payload
+                                            provider_ts = None
+                                            for k in ("kepco_stat_update_datetime", "stat_update_datetime", "statUpdate", "statUpdDt", "update_time", "update_dt", "lastUpdate", "stat_date", "stat_time", "cpStatTime"):
+                                                if k in item and item.get(k):
+                                                    try:
+                                                        provider_ts = str(item.get(k))
+                                                    except Exception:
+                                                        provider_ts = None
+                                                    break
+
                                             charger_insert_sql = """
-                                                INSERT INTO chargers (station_id, cp_id, cp_nm, cp_stat, charge_tp, cs_id, stat_update_datetime)
-                                                VALUES (:station_id, :cp_id, :cp_nm, :cp_stat, :charge_tp, :cs_id, :update_time)
+                                                INSERT INTO chargers (station_id, cp_id, cp_nm, cp_stat, charge_tp, cs_id, stat_update_datetime, kepco_stat_update_datetime)
+                                                VALUES (:station_id, :cp_id, :cp_nm, :cp_stat, :charge_tp, :cs_id, :update_time, :kepco_ts)
                                                 ON CONFLICT (cp_id) DO UPDATE SET
                                                     station_id = COALESCE(EXCLUDED.station_id, chargers.station_id),
                                                     cp_nm = EXCLUDED.cp_nm,
                                                     cp_stat = EXCLUDED.cp_stat,
                                                     charge_tp = EXCLUDED.charge_tp,
-                                                    stat_update_datetime = EXCLUDED.stat_update_datetime
+                                                    stat_update_datetime = EXCLUDED.stat_update_datetime,
+                                                    kepco_stat_update_datetime = EXCLUDED.kepco_stat_update_datetime
                                             """
                                             # clear any prior aborted transaction
                                             try:
@@ -1222,7 +1233,10 @@ async def get_station_charger_specs(
                                                     "cp_stat": item.get("cpStat"),
                                                     "charge_tp": item.get("chargeTp"),
                                                     "cs_id": item.get("csId"),
-                                                    "update_time": now
+                                                    # stat_update_datetime stores server fetch time (now) to be used for 30-min freshness checks
+                                                    "update_time": now,
+                                                    # kepco_stat_update_datetime stores provider-supplied timestamp (if any) for auditing
+                                                    "kepco_ts": provider_ts
                                                 })
                                             else:
                                                 print(f"⚠️ 충전기 DB 저장 스킵: station DB id를 찾을 수 없음 for csId={item.get('csId')}")
