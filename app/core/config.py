@@ -38,8 +38,17 @@ class Settings(BaseSettings):
     REDIS_HOST: str
     REDIS_PORT: int
     REDIS_PASSWORD: Optional[str] = None
-    # Cache TTL in seconds. Use 600s (10 minutes) to balance freshness and load.
-    CACHE_EXPIRE_SECONDS: int = 600
+    # Cache TTL in seconds for station SEARCH results. Use 300s (5 minutes)
+    # per deployment request to balance freshness and load.
+    CACHE_EXPIRE_SECONDS: int = 300
+    # Cache TTL in seconds for station DETAIL results (charger specs/status).
+    # Station-detail caches are kept longer (30 minutes) because they include
+    # richer static/dynamic snapshots; dynamic charger statuses will still be
+    # validated against the API policy in application logic.
+    CACHE_DETAIL_EXPIRE_SECONDS: int = 1800
+    # Number of decimal places to round coordinates for cache keys.
+    # Higher precision (e.g., 8) keeps cache keys very local to exact coords.
+    CACHE_COORD_ROUND_DECIMALS: int = 8
 
     # --------------------------
     # KEPCO API 설정 (기존 EXTERNAL_STATION_API 환경변수 활용)

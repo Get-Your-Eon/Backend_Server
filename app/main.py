@@ -318,18 +318,22 @@ async def search_ev_stations_requirement_compliant(
         print(f"✅ 매핑된 주소: {addr}")
         
         # === 2단계: 반경 기준값 정규화 ===
-        radius_standards = [500, 1000, 3000, 5000, 10000]
+        # Use finer-grained radius buckets so small differences map to expected
+        # buckets: 500, 1000, 2000, 3000, 4000, 5000, 10000 (meters)
+        radius_standards = [500, 1000, 2000, 3000, 4000, 5000, 10000]
         actual_radius = next((r for r in radius_standards if radius <= r), 10000)
         print(f"✅ 반경 정규화: {radius} → {actual_radius}")
         
         # === 3단계: Cache 조회 ===
-        # Use rounded coordinates in the cache key to avoid cache collisions
-        # caused by address tokenization differences. Round to 4 decimal places (~11m)
-        lat_round = round(lat_float, 4)
-        lon_round = round(lon_float, 4)
+        # Use rounded coordinates in the cache key to avoid cache collisions caused
+        # by tiny floating differences. Use a configurable decimal precision so we
+        # can keep cache keys tightly scoped (e.g. 8 decimals -> ~0.001m precision).
+        coord_decimals = getattr(settings, "CACHE_COORD_ROUND_DECIMALS", 8)
+        lat_round = round(lat_float, coord_decimals)
+        lon_round = round(lon_float, coord_decimals)
         # Use coordinate-first key (avoid addr text differences)
         cache_key = f"stations:lat{lat_round}:lon{lon_round}:r{actual_radius}"
-        
+
         try:
             cached_data = await redis_client.get(cache_key)
             if cached_data:
@@ -860,6 +864,33 @@ admin_router = APIRouter(dependencies=[Depends(admin_required)])
 async def admin_data():
     return {"msg": "관리자 전용 데이터입니다."}
 
+
+# Admin: Redis key inspection (dry-run only, no delete)
+@admin_router.get("/redis/keys", summary="관리자: Redis 키 조회 (삭제하지 않음)")
+async def admin_redis_keys(pattern: str = Query("stations:*", description="SCAN 패턴 (예: stations:*)"),
+                           count: int = Query(100, description="SCAN count hint"),
+                           redis_client: Redis = Depends(get_redis_client)):
+    """관리자 전용: Redis에서 패턴에 맞는 키를 나열합니다. 삭제는 수행하지 않습니다.
+
+    보호: 이 엔드포인트는 `admin_required` 의존성으로 보호됩니다. Render에서 직접 호출하거나
+    관리자 자격증명을 사용해 호출하세요.
+    """
+    if not redis_client:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Redis client is not available")
+
+    keys = []
+    try:
+        # async scan_iter is supported by redis.asyncio
+        async for k in redis_client.scan_iter(match=pattern, count=count):
+            keys.append(k)
+            # limit returned keys to avoid huge payloads
+            if len(keys) >= 1000:
+                break
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Redis scan failed: {e}")
+
+    return {"pattern": pattern, "count": len(keys), "keys": keys}
+
 app.include_router(admin_router, prefix="/admin")
 
 
@@ -1251,7 +1282,8 @@ async def get_station_charger_specs(
                 "available_charge_types": available_charge_types,
                 "timestamp": datetime.now().isoformat()
             }
-            await redis_client.setex(cache_key, 1800, json.dumps(cache_data, ensure_ascii=False))  # 30분 캐시
+            # use configured detail TTL (30 minutes by default)
+            await redis_client.setex(cache_key, settings.CACHE_DETAIL_EXPIRE_SECONDS, json.dumps(cache_data, ensure_ascii=False))
             print(f"✅ 충전소 상세 정보 Cache 저장 완료")
         except Exception as cache_error:
             print(f"⚠️ Cache 저장 오류: {cache_error}")
