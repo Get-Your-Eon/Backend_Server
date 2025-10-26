@@ -323,7 +323,11 @@ async def search_ev_stations_requirement_compliant(
         print(f"✅ 반경 정규화: {radius} → {actual_radius}")
         
         # === 3단계: Cache 조회 ===
-        cache_key = f"stations:{addr}:{actual_radius}"
+        # Use rounded coordinates in the cache key to avoid cache collisions
+        # caused by address tokenization differences. Round to 4 decimal places (~11m)
+        lat_round = round(lat_float, 4)
+        lon_round = round(lon_float, 4)
+        cache_key = f"stations:{addr}:{actual_radius}:{lat_round}:{lon_round}"
         
         try:
             cached_data = await redis_client.get(cache_key)
@@ -353,7 +357,7 @@ async def search_ev_stations_requirement_compliant(
         except Exception as cache_error:
             print(f"⚠️ Cache 오류: {cache_error}")
         
-        # === 4단계: DB 조회 (정적 데이터) ===
+    # === 4단계: DB 조회 (정적 데이터) ===
         print(f"✅ DB 조회 시작...")
         try:
             # 정적 데이터 조회 (충전기 상태코드 제외)
@@ -362,7 +366,28 @@ async def search_ev_stations_requirement_compliant(
             # and map them to the expected keys in Python.
             # Note: production DB uses PostGIS `location` (geometry/point) and columns `name`/`address`.
             # Use ST_Y(location) for latitude and ST_X(location) for longitude. Keep COALESCE for address/name.
-            db_query = """
+            # Try a spatial query (PostGIS). If the DB does not support PostGIS or
+            # the `location` column is missing, fall back to a name/address LIKE query.
+            spatial_query = """
+                SELECT DISTINCT
+                    cs_id as station_id,
+                    COALESCE(address, '') as addr,
+                    COALESCE(name, '') as station_name,
+                    ST_Y(location)::text as lat,
+                    ST_X(location)::text as lon
+                FROM stations
+                WHERE location IS NOT NULL
+                  AND ST_DWithin(
+                      location::geography,
+                      ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography,
+                      :radius_m
+                  )
+                ORDER BY cs_id
+                LIMIT 100
+            """
+
+            # Fallback query when spatial support is unavailable
+            fallback_name_query = """
                 SELECT DISTINCT
                     cs_id as station_id,
                     COALESCE(address, '') as addr,
@@ -375,11 +400,18 @@ async def search_ev_stations_requirement_compliant(
                 ORDER BY cs_id
                 LIMIT 100
             """
-            
-            result = await db.execute(
-                text(db_query), 
-                {"addr_pattern": f"%{addr.split()[0] if addr else '서울'}%"}
-            )
+
+            try:
+                result = await db.execute(
+                    text(spatial_query),
+                    {"lon": lon_float, "lat": lat_float, "radius_m": radius}
+                )
+            except Exception:
+                # If spatial query fails (no PostGIS or column differences), fallback
+                result = await db.execute(
+                    text(fallback_name_query),
+                    {"addr_pattern": f"%{addr.split()[0] if addr else '서울'}%"}
+                )
             db_stations = result.fetchall()
             
             if db_stations:
@@ -400,7 +432,9 @@ async def search_ev_stations_requirement_compliant(
                                 "addr": str(row_dict["addr"]),
                                 "station_name": str(row_dict["station_name"]),
                                 "lat": str(row_dict["lat"]),
-                                "lon": str(row_dict["lon"])
+                                "lon": str(row_dict["lon"]),
+                                # ensure distance is returned as string (frontend expects string)
+                                "distance_m": str(int(dist))
                             })
                     except Exception as row_error:
                         print(f"⚠️ DB row 처리 오류: {row_error}")
@@ -412,7 +446,7 @@ async def search_ev_stations_requirement_compliant(
                         lat_float, lon_float, float(x["lat"]), float(x["lon"])
                     ))
                     try:
-                        distances = [int(calculate_distance_haversine(lat_float, lon_float, float(x["lat"]), float(x["lon"]))) for x in db_result]
+                        distances = [int(x.get("distance_m") or calculate_distance_haversine(lat_float, lon_float, float(x["lat"]), float(x["lon"]))) for x in db_result]
                         sample = distances[:10]
                         print(f"🔍 Debug distances sample (meters): count={len(distances)} sample={sample}")
                     except Exception as _dist_err:
@@ -423,7 +457,8 @@ async def search_ev_stations_requirement_compliant(
                         cache_data = {"stations": db_result, "timestamp": datetime.now().isoformat()}
                         await redis_client.setex(cache_key, 3600, json.dumps(cache_data, ensure_ascii=False))
                         print(f"✅ DB 결과 Cache 저장 완료")
-                    except:
+                    except Exception as _c_err:
+                        print(f"⚠️ Cache 저장 실패: {_c_err}")
                         pass
                     
                     return {
@@ -501,7 +536,8 @@ async def search_ev_stations_requirement_compliant(
                             "addr": str(item.get("addr", "")),
                             "station_name": str(item.get("csNm", "")),
                             "lat": str(item_lat),
-                            "lon": str(item_lon)
+                            "lon": str(item_lon),
+                            "distance_m": str(int(dist))
                         }
                         api_stations.append(station_data)
                         
@@ -643,7 +679,7 @@ async def _clear_db_transaction(db: AsyncSession):
         # swallow - best effort only
         pass
 
-@app.get("/api/v1/stations", tags=["Station"], summary="🚀 KEPCO 2025 API - BRAND NEW")
+@app.get("/api/v1/stations-kepco-2025", tags=["Station"], summary="🚀 KEPCO 2025 API - BRAND NEW")
 async def kepco_2025_new_api_implementation(
     lat: float = Query(..., description="위도 좌표", ge=-90, le=90),
     lon: float = Query(..., description="경도 좌표", ge=-180, le=180), 
