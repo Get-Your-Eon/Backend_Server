@@ -38,7 +38,8 @@ class Settings(BaseSettings):
     REDIS_HOST: str
     REDIS_PORT: int
     REDIS_PASSWORD: Optional[str] = None
-    CACHE_EXPIRE_SECONDS: int = 300
+    # Cache TTL in seconds. Use 600s (10 minutes) to balance freshness and load.
+    CACHE_EXPIRE_SECONDS: int = 600
 
     # --------------------------
     # KEPCO API 설정 (기존 EXTERNAL_STATION_API 환경변수 활용)
