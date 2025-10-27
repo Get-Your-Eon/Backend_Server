@@ -319,8 +319,9 @@ async def search_ev_stations_requirement_compliant(
         
         # === 2단계: 반경 기준값 정규화 ===
         # Use "이하" (less than or equal) mapping: 500이하→500, 1000이하→1000, 2000이하→2000, etc.
-        # buckets: 500, 1000, 2000, 3000, 4000, 5000, 10000 (meters)
-        radius_standards = [500, 1000, 2000, 3000, 4000, 5000, 10000]
+        # buckets: 500, 1000, 2000, 3000, 5000, 10000 (meters)
+        # NOTE: keep this list small and canonical to reduce cache fragmentation.
+        radius_standards = [500, 1000, 2000, 3000, 5000, 10000]
         
         # Find the smallest standard that can accommodate the requested radius
         actual_radius = next((r for r in radius_standards if radius <= r), 10000)
@@ -1094,30 +1095,32 @@ async def get_station_charger_specs(
                     except Exception:
                         cached_blob = None
 
-            if cached_blob and isinstance(cached_blob, dict) and cached_blob.get("timestamp"):
-                # try parse timestamp and determine age in minutes
-                try:
-                    cached_ts = datetime.fromisoformat(str(cached_blob.get("timestamp")))
-                    age_min = (datetime.now() - cached_ts).total_seconds() / 60
-                    if age_min <= 30:
-                        print(f"✅ Redis 캐시 사용: station_detail:{station_id} age={age_min:.1f}min")
-                        # normalize cached payload to the endpoint response shape
-                        cached_station_info = cached_blob.get("station_info") or {}
-                        cached_chargers = cached_blob.get("chargers") or []
-                        cached_available = cached_blob.get("available_charge_types") or []
-                        resp = {
-                            "station_name": cached_station_info.get("station_name") or cached_station_info.get("cs_nm") or "",
-                            "available_charge_types": ", ".join(cached_available),
-                            "charger_details": cached_chargers,
-                            "total_chargers": len(cached_chargers),
-                            "source": "cache",
-                            "timestamp": cached_blob.get("timestamp")
-                        }
-                        return JSONResponse(status_code=200, content=resp)
-                    else:
-                        print(f"ℹ️ Redis 캐시 존재하지만 만료 기준 초과(age={age_min:.1f}min) - API/DB 검사 진행")
-                except Exception:
-                    print("⚠️ Redis 캐시의 timestamp 파싱 실패 - 무시하고 API/DB 검사 진행")
+                if cached_blob and isinstance(cached_blob, dict) and cached_blob.get("timestamp"):
+                    # try parse timestamp and determine age in minutes
+                    try:
+                        cached_ts = datetime.fromisoformat(str(cached_blob.get("timestamp")))
+                        age_min = (datetime.now() - cached_ts).total_seconds() / 60
+                        # use configured detail TTL for cache acceptance (seconds -> minutes)
+                        detail_ttl_min = getattr(settings, "CACHE_DETAIL_EXPIRE_SECONDS", 300) / 60
+                        if age_min <= detail_ttl_min:
+                            print(f"✅ Redis 캐시 사용: station_detail:{station_id} age={age_min:.1f}min (ttl_min={detail_ttl_min:.1f})")
+                            # normalize cached payload to the endpoint response shape
+                            cached_station_info = cached_blob.get("station_info") or {}
+                            cached_chargers = cached_blob.get("chargers") or []
+                            cached_available = cached_blob.get("available_charge_types") or []
+                            resp = {
+                                "station_name": cached_station_info.get("station_name") or cached_station_info.get("cs_nm") or "",
+                                "available_charge_types": ", ".join(cached_available),
+                                "charger_details": cached_chargers,
+                                "total_chargers": len(cached_chargers),
+                                "source": "cache",
+                                "timestamp": cached_blob.get("timestamp")
+                            }
+                            return JSONResponse(status_code=200, content=resp)
+                        else:
+                            print(f"ℹ️ Redis 캐시 존재하지만 만료 기준 초과(age={age_min:.1f}min) - API/DB 검사 진행")
+                    except Exception:
+                        print("⚠️ Redis 캐시의 timestamp 파싱 실패 - 무시하고 API/DB 검사 진행")
         except Exception as cache_err:
             print(f"⚠️ Redis 조회 오류(무시): {cache_err}")
 
@@ -1287,22 +1290,29 @@ async def get_station_charger_specs(
 
                                             # Ensure we have station_db_id for the foreign key constraint
                                             if station_db_id is not None:
-                                                await db.execute(text(charger_insert_sql), {
-                                                    "station_id": station_db_id,
-                                                    "cp_id": item.get("cpId"),
-                                                    "cp_nm": item.get("cpNm"),
-                                                    "cp_stat": item.get("cpStat"),
-                                                    "charge_tp": item.get("chargeTp"),
-                                                    "cs_id": item.get("csId"),
-                                                    # stat_update_datetime stores server fetch time (now) to be used for 30-min freshness checks
-                                                    "update_time": now,
-                                                    # kepco_stat_update_datetime stores provider-supplied timestamp (if any) for auditing
-                                                    "kepco_ts": provider_ts
-                                                })
-                                                print(f"✅ 충전기 DB 저장 성공: cp_id={item.get('cpId')}, station_id={station_db_id}")
+                                                try:
+                                                    await _clear_db_transaction(db)
+                                                    await db.execute(text(charger_insert_sql), {
+                                                        "station_id": station_db_id,
+                                                        "cp_id": item.get("cpId"),
+                                                        "cp_nm": item.get("cpNm"),
+                                                        "cp_stat": item.get("cpStat"),
+                                                        "charge_tp": item.get("chargeTp"),
+                                                        "cs_id": item.get("csId"),
+                                                        # stat_update_datetime stores server fetch time (now) to be used for 30-min freshness checks
+                                                        "update_time": now,
+                                                        # kepco_stat_update_datetime stores provider-supplied timestamp (if any) for auditing
+                                                        "kepco_ts": provider_ts
+                                                    })
+                                                    print(f"✅ 충전기 DB 저장 성공: cp_id={item.get('cpId')}, station_id={station_db_id}")
+                                                except Exception as db_err_inner:
+                                                    try:
+                                                        await db.rollback()
+                                                    except Exception:
+                                                        pass
+                                                    print(f"⚠️ 충전기 DB 저장 오류: {db_err_inner}")
                                             else:
-                                                print(f"⚠️ 충전기 DB 저장 스킵: station DB id를 찾을 수 없음 for csId={item.get('csId')}")
-                                                # Try to create station record first if missing
+                                                # station DB id missing -> try to create station then insert charger
                                                 try:
                                                     await _clear_db_transaction(db)
                                                     station_insert_sql = """
@@ -1329,36 +1339,32 @@ async def get_station_charger_specs(
                                                     if station_row:
                                                         station_db_id = station_row._mapping.get("id")
                                                         print(f"✅ 충전소 생성됨: station_id={station_db_id}")
-                                                        # Now try charger insert again
-                                                        await db.execute(text(charger_insert_sql), {
-                                                            "station_id": station_db_id,
-                                                            "cp_id": item.get("cpId"),
-                                                            "cp_nm": item.get("cpNm"),
-                                                            "cp_stat": item.get("cpStat"),
-                                                            "charge_tp": item.get("chargeTp"),
-                                                            "cs_id": item.get("csId"),
-                                                            "update_time": now,
-                                                            "kepco_ts": provider_ts
-                                                        })
-                                                        print(f"✅ 충전기 DB 저장 재시도 성공: cp_id={item.get('cpId')}")
+                                                        try:
+                                                            await db.execute(text(charger_insert_sql), {
+                                                                "station_id": station_db_id,
+                                                                "cp_id": item.get("cpId"),
+                                                                "cp_nm": item.get("cpNm"),
+                                                                "cp_stat": item.get("cpStat"),
+                                                                "charge_tp": item.get("chargeTp"),
+                                                                "cs_id": item.get("csId"),
+                                                                "update_time": now,
+                                                                "kepco_ts": provider_ts
+                                                            })
+                                                            print(f"✅ 충전기 DB 저장 재시도 성공: cp_id={item.get('cpId')}")
+                                                        except Exception as charger_retry_err:
+                                                            try:
+                                                                await db.rollback()
+                                                            except Exception:
+                                                                pass
+                                                            print(f"⚠️ 충전기 재시도 저장 실패: {charger_retry_err}")
+                                                    else:
+                                                        print(f"⚠️ 충전기 DB 저장 스킵: station DB id를 찾을 수 없음 for csId={item.get('csId')}")
                                                 except Exception as station_create_error:
                                                     print(f"⚠️ 충전소 생성 실패: {station_create_error}")
                                                     try:
                                                         await _clear_db_transaction(db)
                                                     except Exception:
                                                         pass
-                                                    "cp_id": item.get("cpId"),
-                                                    "cp_nm": item.get("cpNm"),
-                                                    "cp_stat": item.get("cpStat"),
-                                                    "charge_tp": item.get("chargeTp"),
-                                                    "cs_id": item.get("csId"),
-                                                    # stat_update_datetime stores server fetch time (now) to be used for 30-min freshness checks
-                                                    "update_time": now,
-                                                    # kepco_stat_update_datetime stores provider-supplied timestamp (if any) for auditing
-                                                    "kepco_ts": provider_ts
-                                                })
-                                            else:
-                                                print(f"⚠️ 충전기 DB 저장 스킵: station DB id를 찾을 수 없음 for csId={item.get('csId')}")
                                         except Exception as db_error:
                                             try:
                                                 await db.rollback()
