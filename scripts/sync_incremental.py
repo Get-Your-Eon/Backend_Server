@@ -21,7 +21,7 @@ import sys
 import time
 import json
 import argparse
-from datetime import datetime
+from datetime import datetime, timezone
 import requests
 from sqlalchemy import create_engine, text
 
@@ -31,7 +31,8 @@ def parse_datetime(s):
         return None
     for fmt in ('%Y-%m-%d %H:%M:%S', '%Y%m%d%H%M%S', '%Y-%m-%dT%H:%M:%S'):
         try:
-            return datetime.strptime(s, fmt)
+            # parse and attach UTC tzinfo so returned datetimes are timezone-aware
+            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
         except Exception:
             continue
     return None
@@ -181,7 +182,7 @@ def main():
         sys.exit(1)
 
     engine = create_engine(db_url, pool_pre_ping=True)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     total_s = 0
     total_c = 0

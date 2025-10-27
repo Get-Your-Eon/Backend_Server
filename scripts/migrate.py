@@ -2,7 +2,7 @@
 import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 def main():
     """자동 Alembic 마이그레이션 생성 및 적용 스크립트"""
@@ -13,7 +13,7 @@ def main():
         sys.exit(1)
 
     message = sys.argv[1]
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     print(f"🛠  [{timestamp}] Alembic 마이그레이션 시작...\n")
 

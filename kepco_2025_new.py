@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 import httpx
 import math
-from datetime import datetime
+from datetime import datetime, timezone
 from app.api.deps import frontend_api_key_required
 from app.db.database import get_async_session
 from app.redis_client import get_redis_client
@@ -32,7 +32,7 @@ async def kepco_2025_station_search_brand_new(
     새 URL (올바름): /EVchargeManage.do
     """
     print(f"🚀🚀🚀 KEPCO 2025 BRAND NEW IMPLEMENTATION 🚀🚀🚀")
-    print(f"🚀 Time: {datetime.now()}")
+    print(f"🚀 Time: {datetime.now(timezone.utc)}")
     print(f"🚀 Params: lat={lat}, lon={lon}, radius={radius}")
     
     try:
@@ -153,7 +153,7 @@ async def kepco_2025_station_search_brand_new(
         return {
             "message": "🚀 KEPCO 2025 NEW API SUCCESS!",
             "status": "kepco_2025_success",
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "search_params": {
                 "lat": lat,
                 "lon": lon,
