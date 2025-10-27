@@ -1285,9 +1285,68 @@ async def get_station_charger_specs(
                                             except Exception:
                                                 pass
 
+                                            # Ensure we have station_db_id for the foreign key constraint
                                             if station_db_id is not None:
                                                 await db.execute(text(charger_insert_sql), {
                                                     "station_id": station_db_id,
+                                                    "cp_id": item.get("cpId"),
+                                                    "cp_nm": item.get("cpNm"),
+                                                    "cp_stat": item.get("cpStat"),
+                                                    "charge_tp": item.get("chargeTp"),
+                                                    "cs_id": item.get("csId"),
+                                                    # stat_update_datetime stores server fetch time (now) to be used for 30-min freshness checks
+                                                    "update_time": now,
+                                                    # kepco_stat_update_datetime stores provider-supplied timestamp (if any) for auditing
+                                                    "kepco_ts": provider_ts
+                                                })
+                                                print(f"✅ 충전기 DB 저장 성공: cp_id={item.get('cpId')}, station_id={station_db_id}")
+                                            else:
+                                                print(f"⚠️ 충전기 DB 저장 스킵: station DB id를 찾을 수 없음 for csId={item.get('csId')}")
+                                                # Try to create station record first if missing
+                                                try:
+                                                    await _clear_db_transaction(db)
+                                                    station_insert_sql = """
+                                                        INSERT INTO stations (cs_id, name, address, location, raw_data, stat_update_datetime)
+                                                        VALUES (:cs_id, :name, :address, ST_SetSRID(ST_MakePoint(:longi, :lat), 4326), :raw_data, :update_time)
+                                                        ON CONFLICT (cs_id) DO UPDATE SET
+                                                            name = EXCLUDED.name,
+                                                            address = EXCLUDED.address,
+                                                            location = EXCLUDED.location,
+                                                            raw_data = EXCLUDED.raw_data,
+                                                            stat_update_datetime = EXCLUDED.stat_update_datetime
+                                                        RETURNING id
+                                                    """
+                                                    result = await db.execute(text(station_insert_sql), {
+                                                        "cs_id": item.get("csId"),
+                                                        "name": item.get("csNm"),
+                                                        "address": item.get("addr"),
+                                                        "lat": float(item.get("lat", 0)),
+                                                        "longi": float(item.get("longi", 0)),
+                                                        "raw_data": json.dumps(item, ensure_ascii=False),
+                                                        "update_time": now
+                                                    })
+                                                    station_row = result.fetchone()
+                                                    if station_row:
+                                                        station_db_id = station_row._mapping.get("id")
+                                                        print(f"✅ 충전소 생성됨: station_id={station_db_id}")
+                                                        # Now try charger insert again
+                                                        await db.execute(text(charger_insert_sql), {
+                                                            "station_id": station_db_id,
+                                                            "cp_id": item.get("cpId"),
+                                                            "cp_nm": item.get("cpNm"),
+                                                            "cp_stat": item.get("cpStat"),
+                                                            "charge_tp": item.get("chargeTp"),
+                                                            "cs_id": item.get("csId"),
+                                                            "update_time": now,
+                                                            "kepco_ts": provider_ts
+                                                        })
+                                                        print(f"✅ 충전기 DB 저장 재시도 성공: cp_id={item.get('cpId')}")
+                                                except Exception as station_create_error:
+                                                    print(f"⚠️ 충전소 생성 실패: {station_create_error}")
+                                                    try:
+                                                        await _clear_db_transaction(db)
+                                                    except Exception:
+                                                        pass
                                                     "cp_id": item.get("cpId"),
                                                     "cp_nm": item.get("cpNm"),
                                                     "cp_stat": item.get("cpStat"),
@@ -1329,14 +1388,19 @@ async def get_station_charger_specs(
         # 각 충전기 정보 (상태코드 + 충전방식 매핑)
         charger_details = []
         for charger in cached_chargers:
-            # 상태코드 해석
+            # 상태코드 해석 (KEPCO 기준)
             status_code = charger["status_code"]
             status_text = {
+                "0": "사용가능",
                 "1": "충전가능",
                 "2": "충전중", 
                 "3": "고장/점검",
                 "4": "통신장애",
-                "5": "통신미연결"
+                "5": "통신미연결",
+                "6": "예약중",
+                "7": "운영중지",
+                "8": "정비중",
+                "9": "일시정지"
             }.get(status_code, f"알 수 없음({status_code})")
             
             charger_details.append({
@@ -1344,15 +1408,39 @@ async def get_station_charger_specs(
                 "charger_name": charger["charger_name"],
                 "status_code": status_code,
                 "status_text": status_text,
-                "charge_type": charger["charge_type"]
+                "charge_type": charger["charge_type"],
+                # 추가 사용현황 정보
+                "charge_type_description": {
+                    "1": "완속 (AC 3상)",
+                    "2": "급속 (DC차데모)",
+                    "3": "급속 (DC콤보)",
+                    "4": "완속 (AC단상)",
+                    "5": "급속 (DC차데모+DC콤보)",
+                    "6": "급속 (DC차데모+AC3상)",
+                    "7": "급속 (DC콤보+AC3상)"
+                }.get(charger["charge_type"], f"타입{charger['charge_type']}"),
+                "last_updated": charger.get("stat_update_datetime", "정보없음"),
+                "availability": "사용가능" if status_code in ["0", "1"] else "사용불가"
             })
         
         # === 5단계: Cache 저장 ===
         try:
             cache_key = f"station_detail:{station_id}"
+            
+            # Ensure all datetime objects are converted to ISO strings for JSON serialization
+            def serialize_for_cache(obj):
+                """Convert datetime objects to ISO strings for JSON serialization"""
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                elif isinstance(obj, dict):
+                    return {k: serialize_for_cache(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [serialize_for_cache(item) for item in obj]
+                return obj
+            
             cache_data = {
-                "station_info": station_info,
-                "chargers": charger_details,
+                "station_info": serialize_for_cache(station_info),
+                "chargers": serialize_for_cache(charger_details),
                 "available_charge_types": available_charge_types,
                 "timestamp": datetime.now().isoformat()
             }
