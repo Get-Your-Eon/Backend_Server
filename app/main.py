@@ -979,6 +979,58 @@ async def admin_redis_keys(pattern: str = Query("stations:*", description="SCAN 
 
     return {"pattern": pattern, "count": len(keys), "keys": keys}
 
+
+@admin_router.get("/redis/debug", summary="관리자: Redis 디버그 정보 (ping/info)")
+async def admin_redis_debug(redis_client: Redis = Depends(get_redis_client)):
+    """Admin-only endpoint that returns Redis connectivity and a small INFO summary.
+
+    Protected by admin_required via admin_router. Use this to quickly verify which
+    Redis instance the application is talking to and basic memory/client stats.
+    """
+    if not redis_client:
+        return JSONResponse(status_code=503, content={"ok": False, "reason": "redis_unavailable"})
+    try:
+        ping = await redis_client.ping()
+    except Exception as e:
+        return JSONResponse(status_code=503, content={"ok": False, "reason": f"ping_failed: {e}"})
+
+    # Try to fetch small subset of INFO keys
+    info_summary = {}
+    try:
+        info = await redis_client.info()
+        info_summary = {
+            "role": info.get("role"),
+            "used_memory_human": info.get("used_memory_human"),
+            "connected_clients": info.get("connected_clients"),
+        }
+    except Exception as _:
+        info_summary = {"ok": False, "reason": "info_unavailable"}
+
+    # count a small sample of keys in station_detail namespace
+    key_count = None
+    try:
+        # This is a potentially expensive operation on large datasets; limit by count.
+        cnt = 0
+        async for _k in redis_client.scan_iter(match="station_detail:*", count=100):
+            cnt += 1
+            if cnt >= 1000:
+                break
+        key_count = cnt
+    except Exception:
+        key_count = None
+
+    return {
+        "ok": True,
+        "ping": bool(ping),
+        "info": info_summary,
+        "station_detail_key_sample_count": key_count
+    }
+
+
+# Register admin_router AFTER all admin routes have been defined so every
+# admin endpoint (e.g. /admin/redis/debug) is included. Previously the
+# router was registered too early which caused routes defined afterwards
+# to be omitted from the app and OpenAPI.
 app.include_router(admin_router, prefix="/admin")
 
 
