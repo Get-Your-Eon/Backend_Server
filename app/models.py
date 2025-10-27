@@ -86,7 +86,7 @@ class Charger(Base):
     charge_tp: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # 1:완속, 2:급속
     cp_tp: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)  # 충전방식 코드
     cp_stat: Mapped[Optional[str]] = mapped_column(String(10), nullable=True, index=True)  # 충전기 상태코드 (dynamic)
-    kepco_stat_update_datetime: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)  # KEPCO format datetime
+    kepco_stat_update_datetime: Mapped[Optional[datetime.datetime]] = mapped_column(DateTime(timezone=True), nullable=True)  # KEPCO provider datetime (timestamptz)
     cs_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)  # Parent station KEPCO ID
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime.datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
