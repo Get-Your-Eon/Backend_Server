@@ -321,7 +321,15 @@ async def search_ev_stations_requirement_compliant(
         # Use finer-grained radius buckets so small differences map to expected
         # buckets: 500, 1000, 2000, 3000, 4000, 5000, 10000 (meters)
         radius_standards = [500, 1000, 2000, 3000, 4000, 5000, 10000]
-        actual_radius = next((r for r in radius_standards if radius <= r), 10000)
+        
+        # Find the closest matching radius standard
+        if radius in radius_standards:
+            # Exact match - use as is
+            actual_radius = radius
+        else:
+            # Find the smallest standard that is >= radius
+            actual_radius = next((r for r in radius_standards if radius <= r), 10000)
+        
         print(f"✅ 반경 정규화: {radius} → {actual_radius}")
         
         # === 3단계: Cache 조회 ===
