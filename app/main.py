@@ -477,7 +477,7 @@ async def search_ev_stations_requirement_compliant(
                     try:
                         # don't cache empty results
                         if db_result:
-                            cache_data = {"stations": db_result, "timestamp": datetime.now(timezone.utc).isoformat()}
+                            cache_data = {"stations": _serialize_for_cache(db_result), "timestamp": datetime.now(timezone.utc).isoformat()}
                             await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(cache_data, ensure_ascii=False))
                             print(f"✅ DB 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
                         else:
@@ -620,7 +620,7 @@ async def search_ev_stations_requirement_compliant(
         try:
             # Avoid caching empty API results
             if api_stations:
-                cache_data = {"stations": api_stations, "timestamp": now.isoformat()}
+                cache_data = {"stations": _serialize_for_cache(api_stations), "timestamp": now.isoformat()}
                 await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(cache_data, ensure_ascii=False))
                 print(f"✅ API 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
             else:
@@ -708,6 +708,84 @@ async def _clear_db_transaction(db: AsyncSession):
     except Exception:
         # swallow - best effort only
         pass
+
+
+async def _ensure_station_db_id(db: AsyncSession, cs_id: str, item: dict = None, now: datetime = None):
+    """Ensure a station row exists for given cs_id and return its DB primary key id.
+
+    If the station exists, returns the id. If not, attempts to INSERT the station
+    (using provided `item` for fields) and RETURNING id. This centralizes the
+    logic so callers inserting chargers never omit the required station_id FK.
+    """
+    if not cs_id:
+        return None
+
+    try:
+        res = await db.execute(text("SELECT id FROM stations WHERE cs_id = :cs_id LIMIT 1"), {"cs_id": cs_id})
+        row = res.fetchone()
+        if row and row._mapping.get("id"):
+            return row._mapping.get("id")
+    except Exception:
+        # best-effort: clear transaction and continue to attempt insert
+        try:
+            await _clear_db_transaction(db)
+        except Exception:
+            pass
+
+    # attempt to insert station using available item data (if any)
+    try:
+        if now is None:
+            now = datetime.now(timezone.utc)
+
+        insert_sql = """
+            INSERT INTO stations (cs_id, name, address, location, raw_data, stat_update_datetime)
+            VALUES (:cs_id, :name, :address, ST_SetSRID(ST_MakePoint(:longi, :lat), 4326), :raw_data, :update_time)
+            ON CONFLICT (cs_id) DO UPDATE SET
+                name = COALESCE(EXCLUDED.name, stations.name),
+                address = COALESCE(EXCLUDED.address, stations.address),
+                location = COALESCE(EXCLUDED.location, stations.location),
+                raw_data = COALESCE(EXCLUDED.raw_data, stations.raw_data),
+                stat_update_datetime = COALESCE(EXCLUDED.stat_update_datetime, stations.stat_update_datetime)
+            RETURNING id
+        """
+
+        params = {
+            "cs_id": cs_id,
+            "name": (item.get("csNm") if item else None) or (item.get("cs_nm") if item else None) or None,
+            "address": (item.get("addr") if item else None) or None,
+            "lat": float(item.get("lat")) if item and item.get("lat") else None,
+            "longi": float(item.get("longi")) if item and item.get("longi") else None,
+            "raw_data": json.dumps(item, ensure_ascii=False) if item else None,
+            "update_time": now
+        }
+
+        await _clear_db_transaction(db)
+        r = await db.execute(text(insert_sql), params)
+        row = r.fetchone()
+        if row and row._mapping.get("id"):
+            return row._mapping.get("id")
+    except Exception as e:
+        try:
+            await _clear_db_transaction(db)
+        except Exception:
+            pass
+        print(f"⚠️ _ensure_station_db_id 실패: {e}")
+
+    return None
+
+
+def _serialize_for_cache(obj):
+    """Recursively convert common non-JSON types to JSON-serializable values.
+
+    Handles datetime -> ISO string, dicts, lists. Keeps other primitives unchanged.
+    """
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+    if isinstance(obj, dict):
+        return {k: _serialize_for_cache(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_serialize_for_cache(v) for v in obj]
+    return obj
 
 @app.get("/api/v1/stations-kepco-2025", tags=["Station"], summary="🚀 KEPCO 2025 API - BRAND NEW")
 async def kepco_2025_new_api_implementation(
@@ -1251,15 +1329,9 @@ async def get_station_charger_specs(
                                         try:
                                             # ensure we have the station DB primary key to satisfy chargers.station_id NOT NULL
                                             station_db_id = station_info.get("station_db_id") if station_info else None
+                                            # ensure station_db_id exists (create station row if necessary)
                                             if not station_db_id:
-                                                # try to lookup station DB id by cs_id
-                                                try:
-                                                    sid_res = await db.execute(text("SELECT id FROM stations WHERE cs_id = :cs_id LIMIT 1"), {"cs_id": item.get("csId")})
-                                                    sid_row = sid_res.fetchone()
-                                                    if sid_row:
-                                                        station_db_id = sid_row._mapping.get("id")
-                                                except Exception:
-                                                    station_db_id = None
+                                                station_db_id = await _ensure_station_db_id(db, str(item.get("csId")), item=item, now=now)
 
                                             # determine provider-side timestamp (if any) from API payload
                                             provider_ts = None
@@ -1433,20 +1505,9 @@ async def get_station_charger_specs(
         try:
             cache_key = f"station_detail:{station_id}"
             
-            # Ensure all datetime objects are converted to ISO strings for JSON serialization
-            def serialize_for_cache(obj):
-                """Convert datetime objects to ISO strings for JSON serialization"""
-                if isinstance(obj, datetime):
-                    return obj.isoformat()
-                elif isinstance(obj, dict):
-                    return {k: serialize_for_cache(v) for k, v in obj.items()}
-                elif isinstance(obj, list):
-                    return [serialize_for_cache(item) for item in obj]
-                return obj
-            
             cache_data = {
-                "station_info": serialize_for_cache(station_info),
-                "chargers": serialize_for_cache(charger_details),
+                "station_info": _serialize_for_cache(station_info),
+                "chargers": _serialize_for_cache(charger_details),
                 "available_charge_types": available_charge_types,
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
