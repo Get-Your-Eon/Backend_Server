@@ -15,7 +15,7 @@ import os
 import sys
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 import requests
 from sqlalchemy import create_engine, text
 
@@ -62,7 +62,7 @@ def upsert_station_and_charger(conn, item):
     except Exception:
         lon = None
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     # Upsert station
     # Note: the stations table uses `last_synced_at` for timestamp of sync
