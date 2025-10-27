@@ -1034,6 +1034,58 @@ async def admin_redis_debug(redis_client: Redis = Depends(get_redis_client)):
 app.include_router(admin_router, prefix="/admin")
 
 
+# Startup diagnostic: log registered routes so we can verify deployed route registration
+@app.on_event("startup")
+async def _log_registered_routes_on_startup():
+    try:
+        route_paths = sorted({r.path for r in app.routes})
+        print(f"🛠️ Registered routes count={len(route_paths)}")
+        # print a compact sample of admin routes
+        admin_routes = [p for p in route_paths if p.startswith("/admin")]
+        print(f"🛠️ Admin routes ({len(admin_routes)}): {admin_routes}")
+        # explicit check for the specific debug path we expect
+        target = "/admin/redis/debug"
+        if target in route_paths:
+            print(f"✅ Startup check: {target} is REGISTERED")
+        else:
+            print(f"❌ Startup check: {target} is MISSING (this explains 404 responses)")
+        # also log whether OpenAPI is exposed
+        print(f"🛠️ openapi_url={app.openapi_url}")
+    except Exception as e:
+        print(f"⚠️ Failed to enumerate routes on startup: {e}")
+
+
+# Internal debug endpoint (protected by DEBUG_TOKEN env var). This is temporary and
+# should be removed after investigation. Returns registered routes and admin flags.
+@app.get("/internal/debug/admin-routes", include_in_schema=False)
+async def _internal_debug_admin_routes(x_debug_token: Optional[str] = Header(None)):
+    """Return minimal runtime info about registered routes.
+
+    Protection: requires environment variable DEBUG_TOKEN to be set on the server
+    and the same value sent in header `X-Debug-Token`.
+    If DEBUG_TOKEN is not set, the endpoint reports that it is disabled.
+    """
+    debug_token = os.getenv("DEBUG_TOKEN", "")
+    if not debug_token:
+        return JSONResponse(status_code=404, content={"ok": False, "reason": "debug_token_not_configured"})
+
+    if not x_debug_token or x_debug_token != debug_token:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # Compact list of routes (strings)
+    try:
+        route_paths = sorted({r.path for r in app.routes})
+    except Exception:
+        route_paths = [r.path for r in app.routes]
+
+    return {
+        "ok": True,
+        "is_admin_mode": IS_ADMIN,
+        "openapi_url": app.openapi_url,
+        "routes": route_paths
+    }
+
+
 
 
 # --- DB 연결 테스트 / 간단 조회 엔드포인트 ---
