@@ -42,10 +42,11 @@ class Settings(BaseSettings):
     # per deployment request to balance freshness and load.
     CACHE_EXPIRE_SECONDS: int = 300
     # Cache TTL in seconds for station DETAIL results (charger specs/status).
-    # Station-detail caches are kept longer (30 minutes) because they include
-    # richer static/dynamic snapshots; dynamic charger statuses will still be
-    # validated against the API policy in application logic.
-    CACHE_DETAIL_EXPIRE_SECONDS: int = 1800
+    # Use 300s (5 minutes) as the baseline for dynamic data freshness. The
+    # application logic will still validate charger status recency (30-min
+    # DB-based rule for longer-term decisions) but cached dynamic snapshots
+    # should be refreshed frequently to remain current.
+    CACHE_DETAIL_EXPIRE_SECONDS: int = 300
     # Number of decimal places to round coordinates for cache keys.
     # Higher precision (e.g., 8) keeps cache keys very local to exact coords.
     CACHE_COORD_ROUND_DECIMALS: int = 8

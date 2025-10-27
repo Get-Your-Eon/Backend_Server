@@ -1,6 +1,6 @@
 import contextlib
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 
 from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Header, Body, Query, Path
@@ -256,7 +256,7 @@ async def search_ev_stations_new_test(
     print(f"🔥🔥🔥 TEST ENDPOINT - NEW CODE CONFIRMED RUNNING 🔥🔥🔥")
     return {
         "message": "NEW CODE IS RUNNING!",
-        "timestamp": datetime.now().isoformat(),
+    "timestamp": datetime.now(timezone.utc).isoformat(),
         "received_params": {"lat": lat, "lon": lon, "radius": radius}
     }
 
@@ -477,7 +477,7 @@ async def search_ev_stations_requirement_compliant(
                     try:
                         # don't cache empty results
                         if db_result:
-                            cache_data = {"stations": db_result, "timestamp": datetime.now().isoformat()}
+                            cache_data = {"stations": db_result, "timestamp": datetime.now(timezone.utc).isoformat()}
                             await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(cache_data, ensure_ascii=False))
                             print(f"✅ DB 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
                         else:
@@ -538,7 +538,7 @@ async def search_ev_stations_requirement_compliant(
         
         # === 6단계: 데이터 처리 및 DB 저장 ===
         api_stations = []
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         
         if isinstance(kepco_data, dict) and "data" in kepco_data:
             raw_data = kepco_data["data"]
@@ -727,7 +727,7 @@ async def kepco_2025_new_api_implementation(
     """
     print(f"🚀🚀🚀 KEPCO 2025 COMPLETELY NEW CODE 🚀🚀🚀")
     print(f"🚀 Function: kepco_2025_new_api_implementation")
-    print(f"🚀 Time: {datetime.now()}")
+    print(f"🚀 Time: {datetime.now(timezone.utc)}")
     print(f"🚀 Params: lat={lat}, lon={lon}, radius={radius}")
     print(f"🚀 ABSOLUTE CONFIRMATION: This is the NEW CODE running!")
     print(f"🚀 Expected KEPCO URL: https://bigdata.kepco.co.kr/openapi/v1/EVchargeManage.do")
@@ -840,7 +840,7 @@ async def kepco_2025_new_api_implementation(
         return {
             "message": "🚀 KEPCO 2025 NEW API SUCCESS!",
             "status": "kepco_2025_success",
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "search_params": {
                 "lat": lat,
                 "lon": lon,
@@ -954,7 +954,7 @@ async def redis_test_endpoint(redis_client: Redis = Depends(get_redis_client)):
     if not redis_client:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Redis client is not initialized or connected.")
     test_key = "infra:test:key"
-    test_data = {"status": "ok", "timestamp": datetime.now().isoformat()}
+    test_data = {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
     try:
         await set_cache(test_key, test_data, expire=10)
         retrieved_data = await get_cache(test_key)
@@ -1099,7 +1099,7 @@ async def get_station_charger_specs(
                     # try parse timestamp and determine age in minutes
                     try:
                         cached_ts = datetime.fromisoformat(str(cached_blob.get("timestamp")))
-                        age_min = (datetime.now() - cached_ts).total_seconds() / 60
+                        age_min = (datetime.now(timezone.utc) - cached_ts).total_seconds() / 60
                         # use configured detail TTL for cache acceptance (seconds -> minutes)
                         detail_ttl_min = getattr(settings, "CACHE_DETAIL_EXPIRE_SECONDS", 300) / 60
                         if age_min <= detail_ttl_min:
@@ -1130,7 +1130,7 @@ async def get_station_charger_specs(
 
         if station_info:
             # Use the latest charger-level update timestamp (not static station timestamp)
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             last_charger_update = station_info.get("last_charger_update")
 
             # Normalize last_charger_update into a datetime object if possible.
@@ -1222,7 +1222,7 @@ async def get_station_charger_specs(
                     if isinstance(kepco_data, dict) and "data" in kepco_data:
                         raw_data = kepco_data["data"]
                         updated_chargers = []
-                        now = datetime.now()
+                        now = datetime.now(timezone.utc)
                         
                         if isinstance(raw_data, list):
                             for item in raw_data:
@@ -1448,7 +1448,7 @@ async def get_station_charger_specs(
                 "station_info": serialize_for_cache(station_info),
                 "chargers": serialize_for_cache(charger_details),
                 "available_charge_types": available_charge_types,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
             # use configured detail TTL (30 minutes by default)
             await redis_client.setex(cache_key, settings.CACHE_DETAIL_EXPIRE_SECONDS, json.dumps(cache_data, ensure_ascii=False))
@@ -1465,7 +1465,7 @@ async def get_station_charger_specs(
             "charger_details": charger_details,
             "total_chargers": len(charger_details),
             "source": response_source,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
     except HTTPException:
