@@ -1237,7 +1237,7 @@ async def get_station_charger_specs(
             # If DB is fresh, load charger rows to return
             if not need_api_call:
                 charger_query = """
-                    SELECT station_id, cp_id, cp_nm, cp_stat, charge_tp, cs_id, stat_update_datetime
+                    SELECT station_id, cp_id, cp_nm, cp_stat, charge_tp, cs_id, stat_update_datetime, kepco_stat_update_datetime
                     FROM chargers 
                     WHERE cs_id = :station_id
                     ORDER BY cp_id
@@ -1257,6 +1257,7 @@ async def get_station_charger_specs(
                         "status_code": str(row_dict.get("cp_stat") or ""),
                         "charge_type": str(row_dict.get("charge_tp") or ""),
                         "stat_update_datetime": sdt_iso,
+                        "kepco_stat_update_datetime": row_dict.get("kepco_stat_update_datetime"),
                         "station_db_id": row_dict.get("station_id")
                     })
         
