@@ -1,6 +1,6 @@
 import contextlib
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import os
 
 from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Header, Body, Query, Path
@@ -323,10 +323,16 @@ async def search_ev_stations_requirement_compliant(
         # NOTE: keep this list small and canonical to reduce cache fragmentation.
         radius_standards = [500, 1000, 2000, 3000, 5000, 10000]
         
-        # Find the smallest standard that can accommodate the requested radius
-        actual_radius = next((r for r in radius_standards if radius <= r), 10000)
-        
-        print(f"✅ 반경 정규화: {radius} → {actual_radius}")
+        # Normalize the requested radius to an integer and find the smallest
+        # canonical bucket that is >= the requested radius. This avoids
+        # surprising mappings caused by float/string inputs.
+        try:
+            requested_radius = int(round(float(radius)))
+        except Exception:
+            requested_radius = radius
+
+        actual_radius = next((r for r in radius_standards if requested_radius <= r), radius_standards[-1])
+        print(f"✅ 반경 정규화: requested={requested_radius} -> normalized={actual_radius} (buckets={radius_standards})")
         
         # === 3단계: Cache 조회 ===
         # Use rounded coordinates in the cache key to avoid cache collisions caused
@@ -1257,7 +1263,7 @@ async def get_station_charger_specs(
                         "status_code": str(row_dict.get("cp_stat") or ""),
                         "charge_type": str(row_dict.get("charge_tp") or ""),
                         "stat_update_datetime": sdt_iso,
-                        "kepco_stat_update_datetime": row_dict.get("kepco_stat_update_datetime"),
+                        "kepco_stat_update_datetime": (row_dict.get("kepco_stat_update_datetime").isoformat() if isinstance(row_dict.get("kepco_stat_update_datetime"), datetime) else row_dict.get("kepco_stat_update_datetime")),
                         "station_db_id": row_dict.get("station_id")
                     })
         
@@ -1336,13 +1342,46 @@ async def get_station_charger_specs(
 
                                             # determine provider-side timestamp (if any) from API payload
                                             provider_ts = None
-                                            for k in ("kepco_stat_update_datetime", "stat_update_datetime", "statUpdate", "statUpdDt", "update_time", "update_dt", "lastUpdate", "stat_date", "stat_time", "cpStatTime"):
+                                            provider_ts_dt = None
+                                            # Try to extract and parse provider-supplied timestamp from several possible key names.
+                                            for k in ("kepco_stat_update_datetime", "stat_update_datetime", "statUpdateDatetime", "statUpdate", "statUpdDt", "update_time", "update_dt", "lastUpdate", "stat_date", "stat_time", "cpStatTime"):
                                                 if k in item and item.get(k):
+                                                    raw_ts = item.get(k)
+                                                    # Normalize to ISO UTC when possible; otherwise keep raw string for auditing.
                                                     try:
-                                                        provider_ts = str(item.get(k))
+                                                        # try ISO formats first
+                                                        try:
+                                                            parsed = datetime.fromisoformat(str(raw_ts))
+                                                            if parsed.tzinfo is None:
+                                                                # assume UTC if no tz provided
+                                                                parsed = parsed.replace(tzinfo=timezone.utc)
+                                                            provider_ts_dt = parsed.astimezone(timezone.utc)
+                                                            provider_ts = provider_ts_dt.isoformat()
+                                                        except Exception:
+                                                            # try common compact format YYYYMMDDHHMMSS
+                                                            try:
+                                                                parsed = datetime.strptime(str(raw_ts), "%Y%m%d%H%M%S")
+                                                                provider_ts_dt = parsed.replace(tzinfo=timezone.utc)
+                                                                provider_ts = provider_ts_dt.isoformat()
+                                                            except Exception:
+                                                                # fallback: stringify raw value
+                                                                provider_ts = str(raw_ts)
+                                                                provider_ts_dt = None
                                                     except Exception:
-                                                        provider_ts = None
+                                                        provider_ts = str(raw_ts)
+                                                        provider_ts_dt = None
                                                     break
+
+                                            # Log notable discrepancies between provider timestamp and server fetch time for monitoring
+                                            try:
+                                                if provider_ts_dt:
+                                                    delta = now - provider_ts_dt
+                                                    # if provider timestamp differs from server fetch by >5 minutes, log it for review
+                                                    if abs(delta) > timedelta(minutes=5):
+                                                        print(f"⚠️ Provider timestamp discrepancy for csId={item.get('csId')} cpId={item.get('cpId')}: provider={provider_ts_dt.isoformat()} server_fetch={now.isoformat()} delta={delta}")
+                                            except Exception:
+                                                # non-fatal monitoring failure
+                                                pass
 
                                             charger_insert_sql = """
                                                 INSERT INTO chargers (station_id, cp_id, cp_nm, cp_stat, charge_tp, cs_id, stat_update_datetime, kepco_stat_update_datetime)
