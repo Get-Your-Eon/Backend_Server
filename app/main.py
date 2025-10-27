@@ -484,7 +484,7 @@ async def search_ev_stations_requirement_compliant(
                         # don't cache empty results
                         if db_result:
                             cache_data = {"stations": _serialize_for_cache(db_result), "timestamp": datetime.now(timezone.utc).isoformat()}
-                            await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(cache_data, ensure_ascii=False))
+                            await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(_serialize_for_cache(cache_data), ensure_ascii=False))
                             print(f"✅ DB 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
                         else:
                             print(f"ℹ️ DB 결과 빈 리스트 - 캐시 저장 생략: key={cache_key}")
@@ -627,7 +627,7 @@ async def search_ev_stations_requirement_compliant(
             # Avoid caching empty API results
             if api_stations:
                 cache_data = {"stations": _serialize_for_cache(api_stations), "timestamp": now.isoformat()}
-                await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(cache_data, ensure_ascii=False))
+                await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(_serialize_for_cache(cache_data), ensure_ascii=False))
                 print(f"✅ API 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
             else:
                 print(f"ℹ️ API 결과 빈 리스트 - 캐시 저장 생략: key={cache_key}")
@@ -1180,9 +1180,35 @@ async def get_station_charger_specs(
                         cached_blob = None
 
                 if cached_blob and isinstance(cached_blob, dict) and cached_blob.get("timestamp"):
-                    # try parse timestamp and determine age in minutes
-                    try:
-                        cached_ts = datetime.fromisoformat(str(cached_blob.get("timestamp")))
+                    # Robust parsing of cached timestamp:
+                    # - Accept ISO with and without timezone
+                    # - Accept ISO with trailing 'Z' (convert to +00:00)
+                    # - Accept legacy compact format YYYYMMDDHHMMSS
+                    def _parse_cached_ts(raw_ts):
+                        if raw_ts is None:
+                            return None
+                        s = str(raw_ts)
+                        # Handle trailing Z (UTC)
+                        if s.endswith("Z"):
+                            s = s[:-1] + "+00:00"
+                        try:
+                            parsed = datetime.fromisoformat(s)
+                            # Treat naive datetimes as UTC for cache age calculations
+                            if parsed.tzinfo is None:
+                                parsed = parsed.replace(tzinfo=timezone.utc)
+                            return parsed
+                        except Exception:
+                            # Try legacy compact format: YYYYMMDDHHMMSS
+                            try:
+                                parsed = datetime.strptime(s, "%Y%m%d%H%M%S")
+                                return parsed.replace(tzinfo=timezone.utc)
+                            except Exception:
+                                return None
+
+                    cached_ts = _parse_cached_ts(cached_blob.get("timestamp"))
+                    if cached_ts is None:
+                        print("⚠️ Redis 캐시의 timestamp 파싱 실패 - 무시하고 API/DB 검사 진행")
+                    else:
                         age_min = (datetime.now(timezone.utc) - cached_ts).total_seconds() / 60
                         # use configured detail TTL for cache acceptance (seconds -> minutes)
                         detail_ttl_min = getattr(settings, "CACHE_DETAIL_EXPIRE_SECONDS", 300) / 60
@@ -1203,8 +1229,6 @@ async def get_station_charger_specs(
                             return JSONResponse(status_code=200, content=resp)
                         else:
                             print(f"ℹ️ Redis 캐시 존재하지만 만료 기준 초과(age={age_min:.1f}min) - API/DB 검사 진행")
-                    except Exception:
-                        print("⚠️ Redis 캐시의 timestamp 파싱 실패 - 무시하고 API/DB 검사 진행")
         except Exception as cache_err:
             print(f"⚠️ Redis 조회 오류(무시): {cache_err}")
 
@@ -1552,7 +1576,7 @@ async def get_station_charger_specs(
                 "timestamp": datetime.now(timezone.utc).isoformat()
             }
             # use configured detail TTL (30 minutes by default)
-            await redis_client.setex(cache_key, settings.CACHE_DETAIL_EXPIRE_SECONDS, json.dumps(cache_data, ensure_ascii=False))
+            await redis_client.setex(cache_key, settings.CACHE_DETAIL_EXPIRE_SECONDS, json.dumps(_serialize_for_cache(cache_data), ensure_ascii=False))
             print(f"✅ 충전소 상세 정보 Cache 저장 완료")
         except Exception as cache_error:
             print(f"⚠️ Cache 저장 오류: {cache_error}")
