@@ -1,7 +1,7 @@
 """Repository for Station and Charger data access"""
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func, text
@@ -80,7 +80,7 @@ class StationRepository:
         cs_id = station_data["cs_id"]
         existing = await self.get_by_cs_id(cs_id)
         
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         if existing:
             # Update existing station
@@ -178,7 +178,7 @@ class ChargerRepository:
         cp_id = charger_data["cp_id"]
         existing = await self.get_by_cp_id(cp_id)
         
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         # Parse KEPCO datetime string to datetime object
         kepco_datetime_str = charger_data.get("kepco_stat_update_datetime", "")
@@ -186,7 +186,7 @@ class ChargerRepository:
         if kepco_datetime_str:
             try:
                 # Assuming KEPCO uses format like "2023-10-23 14:30:00"
-                stat_update_datetime = datetime.strptime(kepco_datetime_str, "%Y-%m-%d %H:%M:%S")
+                stat_update_datetime = datetime.strptime(kepco_datetime_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
             except ValueError:
                 logger.warning(f"Failed to parse KEPCO datetime: {kepco_datetime_str}")
         
@@ -233,7 +233,7 @@ class ChargerRepository:
             List of chargers needing status updates
         """
         from datetime import timedelta
-        threshold_time = datetime.utcnow() - timedelta(minutes=threshold_minutes)
+        threshold_time = datetime.now(timezone.utc) - timedelta(minutes=threshold_minutes)
         
         result = await self.db.execute(
             select(Charger).where(
