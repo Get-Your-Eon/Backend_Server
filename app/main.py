@@ -509,8 +509,7 @@ async def search_ev_stations_requirement_compliant(
         
         # === 5단계: API 호출 및 저장 ===
         print(f"✅ KEPCO API 호출 시작...")
-        from app.core.config import settings
-        
+        # use module-level `settings` imported at top to avoid UnboundLocalError
         kepco_url = settings.EXTERNAL_STATION_API_BASE_URL
         kepco_key = settings.EXTERNAL_STATION_API_KEY
         
@@ -1398,8 +1397,7 @@ async def get_station_charger_specs(
         # === 3단계: API 호출 (필요시) ===
         if need_api_call:
             print(f"✅ KEPCO API 호출로 최신 데이터 조회...")
-            from app.core.config import settings
-            
+            # use module-level `settings` imported at top
             kepco_url = settings.EXTERNAL_STATION_API_BASE_URL
             kepco_key = settings.EXTERNAL_STATION_API_KEY
             
