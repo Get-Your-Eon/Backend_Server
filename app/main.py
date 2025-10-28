@@ -265,7 +265,7 @@ async def search_ev_stations_new_test(
 async def search_ev_stations_requirement_compliant(
     lat: str = Query(..., description="사용자 위도 (string 타입)", regex=r"^-?\d+\.?\d*$"),
     lon: str = Query(..., description="사용자 경도 (string 타입)", regex=r"^-?\d+\.?\d*$"),
-    radius: int = Query(..., description="반경(m) - 500,1000,1500,2000,2500,3000,5000,10000 기준", ge=100, le=10000),
+    radius: int = Query(..., description="반경(m) - 1000,3000,5000,7000,10000 기준", ge=100, le=10000),
     page: int = Query(1, description="페이지 번호", ge=1),
     limit: int = Query(20, description="페이지당 결과 수", ge=1, le=100),
     api_key: str = Depends(frontend_api_key_required),
@@ -277,7 +277,7 @@ async def search_ev_stations_requirement_compliant(
     
     1. 사용자 위도/경도(string) → 시/군/구/동 매핑 → addr 생성
     2. Cache 조회 → DB 조회 → API 호출 순서
-    3. 반경 기준값(500/1000/3000/5000/10000) 처리
+    3. 반경 기준값(1000/3000/5000/7000/10000) 처리
     4. 정적/동적 데이터 분리 저장
     5. 응답: 충전소ID, 충전기주소(addr), 충전소명칭, 위도, 경도 (모두 string)
     """
@@ -324,8 +324,8 @@ async def search_ev_stations_requirement_compliant(
         # Use "이하" (less than or equal) mapping: map requested radius to
         # the smallest canonical bucket that is >= requested value.
         # New required buckets per product spec:
-        # 500, 1000, 1500, 2000, 2500, 3000, 5000, 10000 (meters)
-        radius_standards = [500, 1000, 1500, 2000, 2500, 3000, 5000, 10000]
+        # 1000, 3000, 5000, 7000, 10000 (meters)
+        radius_standards = [1000, 3000, 5000, 7000, 10000]
 
         # Normalize the requested radius to an integer and find the smallest
         # canonical bucket that is >= the requested radius. This avoids
@@ -368,6 +368,23 @@ async def search_ev_stations_requirement_compliant(
                         # avoid mutating cached object
                         station_out = dict(station)
                         station_out["distance_m"] = str(int(dist))
+                        # fetch charger counts per-station (do not store counts in the cache)
+                        try:
+                            counts_q = "SELECT COUNT(*) AS total_ch, COALESCE(SUM( (cp_stat::text = '1')::int ), 0) AS avail_ch FROM chargers WHERE cs_id = :cs_id"
+                            cnt_res = await db.execute(text(counts_q), {"cs_id": station_out.get("station_id")})
+                            cnt_row = cnt_res.fetchone()
+                            if cnt_row:
+                                total_ch = int(cnt_row._mapping.get("total_ch") or 0)
+                                avail_ch = int(cnt_row._mapping.get("avail_ch") or 0)
+                            else:
+                                total_ch = 0
+                                avail_ch = 0
+                        except Exception:
+                            total_ch = 0
+                            avail_ch = 0
+
+                        station_out["total_chargers"] = total_ch
+                        station_out["available_chargers"] = avail_ch
                         filtered_stations.append(station_out)
                 
                 filtered_stations.sort(key=lambda x: int(x["distance_m"]))
@@ -400,7 +417,10 @@ async def search_ev_stations_requirement_compliant(
                     ST_Y(location)::text as lat,
                     ST_X(location)::text as lon,
                     -- compute distance in meters on DB side for accurate ordering/filtering
-                    ROUND(ST_Distance(location::geography, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography))::int as distance_m
+                    ROUND(ST_Distance(location::geography, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography))::int as distance_m,
+                    -- charger counts (total and available). We treat cp_stat values '0' and '1' as available.
+                    (SELECT COUNT(*) FROM chargers WHERE cs_id = stations.cs_id) AS total_chargers,
+                    (SELECT COALESCE(SUM( (cp_stat::text = '1')::int ), 0) FROM chargers WHERE cs_id = stations.cs_id) AS available_chargers
                 FROM stations
                 WHERE location IS NOT NULL
                   AND ST_DWithin(
@@ -420,7 +440,9 @@ async def search_ev_stations_requirement_compliant(
                     COALESCE(name, '') as station_name,
                     ST_Y(location)::text as lat,
                     ST_X(location)::text as lon,
-                    ROUND(ST_Distance(location::geography, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography))::int as distance_m
+                    ROUND(ST_Distance(location::geography, ST_SetSRID(ST_MakePoint(:lon, :lat), 4326)::geography))::int as distance_m,
+                    (SELECT COUNT(*) FROM chargers WHERE cs_id = stations.cs_id) AS total_chargers,
+                    (SELECT COALESCE(SUM( (cp_stat::text = '1')::int ), 0) FROM chargers WHERE cs_id = stations.cs_id) AS available_chargers
                 FROM stations
                 WHERE (COALESCE(address, '') LIKE :addr_pattern OR COALESCE(name, '') LIKE :addr_pattern)
                 AND location IS NOT NULL
@@ -464,15 +486,20 @@ async def search_ev_stations_requirement_compliant(
                             dist_val = int(calculate_distance_haversine(lat_float, lon_float, float(row_dict["lat"]), float(row_dict["lon"])))
 
                         if dist_val <= radius:
-                            db_result.append({
-                                "station_id": str(row_dict["station_id"]),
-                                "addr": str(row_dict["addr"]),
-                                "station_name": str(row_dict["station_name"]),
-                                "lat": str(row_dict["lat"]),
-                                "lon": str(row_dict["lon"]),
-                                # ensure distance is returned as string (frontend expects string)
-                                "distance_m": str(int(dist_val))
-                            })
+                                # charger counts from DB subselects
+                                total_ch = int(row_dict.get("total_chargers") or 0)
+                                avail_ch = int(row_dict.get("available_chargers") or 0)
+                                db_result.append({
+                                    "station_id": str(row_dict["station_id"]),
+                                    "addr": str(row_dict["addr"]),
+                                    "station_name": str(row_dict["station_name"]),
+                                    "lat": str(row_dict["lat"]),
+                                    "lon": str(row_dict["lon"]),
+                                    # ensure distance is returned as string (frontend expects string)
+                                    "distance_m": str(int(dist_val)),
+                                    "total_chargers": total_ch,
+                                    "available_chargers": avail_ch
+                                })
                     except Exception as row_error:
                         print(f"⚠️ DB row 처리 오류: {row_error}")
                         continue
@@ -493,7 +520,8 @@ async def search_ev_stations_requirement_compliant(
                     try:
                         # don't cache empty results; when caching, exclude dynamic fields
                         if db_result:
-                            cache_stations = [{k: v for k, v in s.items() if k != "distance_m"} for s in db_result]
+                            # Exclude dynamic fields (distance and charger counts) from cache
+                            cache_stations = [{k: v for k, v in s.items() if k not in ("distance_m", "total_chargers", "available_chargers")} for s in db_result]
                             cache_data = {"stations": _serialize_for_cache(cache_stations), "timestamp": datetime.now(timezone.utc).isoformat()}
                             await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(_serialize_for_cache(cache_data), ensure_ascii=False))
                             print(f"✅ DB 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
@@ -641,8 +669,8 @@ async def search_ev_stations_requirement_compliant(
         try:
             # Avoid caching empty API results
             if api_stations:
-                # when caching API results, exclude dynamic distance_m (will be computed per request)
-                cache_stations = [{k: v for k, v in s.items() if k != "distance_m"} for s in api_stations]
+                # when caching API results, exclude dynamic fields (distance and charger counts)
+                cache_stations = [{k: v for k, v in s.items() if k not in ("distance_m", "total_chargers", "available_chargers")} for s in api_stations]
                 cache_data = {"stations": _serialize_for_cache(cache_stations), "timestamp": now.isoformat()}
                 await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(_serialize_for_cache(cache_data), ensure_ascii=False))
                 print(f"✅ API 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
@@ -1633,7 +1661,7 @@ async def get_station_charger_specs(
                     "7": "급속 (DC콤보+AC3상)"
                 }.get(charger["charge_type"], f"타입{charger['charge_type']}"),
                 "last_updated": charger.get("stat_update_datetime", "정보없음"),
-                "availability": "사용가능" if status_code in ["0", "1"] else "사용불가"
+                "availability": "사용가능" if status_code == "1" else "사용불가"
             })
         
         # === 5단계: Cache 저장 ===
