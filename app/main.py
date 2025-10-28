@@ -1384,14 +1384,19 @@ async def get_station_charger_specs(
             last_charger_update_dt = None
             if last_charger_update:
                 if isinstance(last_charger_update, datetime):
-                    last_charger_update_dt = last_charger_update
+                    # If the DB returned a naive datetime, treat it as UTC to avoid
+                    # arithmetic errors when comparing with timezone-aware 'now'.
+                    if last_charger_update.tzinfo is None:
+                        last_charger_update_dt = last_charger_update.replace(tzinfo=timezone.utc)
+                    else:
+                        last_charger_update_dt = last_charger_update
                 else:
                     # If DB layer returned a string (ISO) try to parse it.
                     try:
-                        last_charger_update_dt = datetime.fromisoformat(str(last_charger_update))
-                        # Treat naive provider timestamps as UTC to avoid arithmetic errors
-                        if last_charger_update_dt.tzinfo is None:
-                            last_charger_update_dt = last_charger_update_dt.replace(tzinfo=timezone.utc)
+                        parsed = datetime.fromisoformat(str(last_charger_update))
+                        if parsed.tzinfo is None:
+                            parsed = parsed.replace(tzinfo=timezone.utc)
+                        last_charger_update_dt = parsed
                     except Exception:
                         # Could not parse — leave as None which triggers API call
                         last_charger_update_dt = None
