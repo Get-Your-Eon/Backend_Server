@@ -819,8 +819,31 @@ async def kepco_2025_new_api_implementation(
         # === 직접 KEPCO API 호출 (단순화) ===
         from app.core.config import settings
         
-        # 좌표 → 주소 변환
-        search_addr = "서울특별시 강남구"  # 기본값 (나중에 geolocation 추가 가능)
+        # 좌표 → 주소 변환 (Nominatim 역지오코딩 사용)
+        # 이전에 하드코딩된 '서울특별시 강남구' 때문에 입력 좌표와 무관하게 결과가 나오는 문제가 있었습니다.
+        # 여기서 실제로 lat/lon을 역지오코딩해서 KEPCO API의 addr 파라미터로 사용합니다.
+        try:
+            async with httpx.AsyncClient() as client:
+                nomi_resp = await client.get(
+                    "https://nominatim.openstreetmap.org/reverse",
+                    params={"lat": lat, "lon": lon, "format": "json", "addressdetails": 1, "accept-language": "ko"},
+                    headers={"User-Agent": "Codyssey-EV-App/1.0"},
+                    timeout=10.0
+                )
+                if nomi_resp.status_code == 200:
+                    nomi_json = nomi_resp.json()
+                    addr_comp = nomi_json.get("address", {}) if isinstance(nomi_json, dict) else {}
+                    city = addr_comp.get("city") or addr_comp.get("town") or ""
+                    district = addr_comp.get("borough") or addr_comp.get("suburb") or ""
+                    search_addr = f"{city} {district}".strip()
+                    if not search_addr:
+                        # fallback to display_name or coordinate string
+                        search_addr = nomi_json.get("display_name") if isinstance(nomi_json, dict) else f"{lat},{lon}"
+                else:
+                    search_addr = f"{lat},{lon}"
+        except Exception:
+            # Any failure in geocoding should not block KEPCO call; use coordinate fallback
+            search_addr = f"{lat},{lon}"
         
         # KEPCO API 설정
         kepco_url = settings.EXTERNAL_STATION_API_BASE_URL
