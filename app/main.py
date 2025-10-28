@@ -902,7 +902,8 @@ async def kepco_2025_new_api_implementation(
             print(f"🚀 Found {len(raw_data) if isinstance(raw_data, list) else 0} stations from KEPCO")
             
             if isinstance(raw_data, list):
-                for item in raw_data[:limit]:  # 제한된 개수만 처리
+                # process all returned stations from KEPCO, then sort and limit
+                for item in raw_data:
                     try:
                         slat = float(item.get("lat", 0))
                         slon = float(item.get("longi", 0))
@@ -912,7 +913,13 @@ async def kepco_2025_new_api_implementation(
                         
                         # 거리 확인
                         dist = calculate_distance(lat, lon, slat, slon)
-                        if dist > radius:
+                        # ensure numeric distance and use radius filter
+                        try:
+                            if dist is None:
+                                continue
+                            if dist > radius:
+                                continue
+                        except Exception:
                             continue
                         
                         stations.append({
@@ -937,8 +944,14 @@ async def kepco_2025_new_api_implementation(
         except Exception:
             pass
 
-        # 결과 정렬 및 반환
-        stations.sort(key=lambda x: x["distance_m"])
+        # 결과 정렬 및 반환: sort by numeric distance and then apply limit
+        try:
+            stations.sort(key=lambda x: int(x.get("distance_m") or 999999))
+        except Exception:
+            try:
+                stations.sort(key=lambda x: x.get("distance_m") or 999999)
+            except Exception:
+                pass
         final_result = stations[:limit]
         
         print(f"🚀 Final result: {len(final_result)} stations")
@@ -1376,6 +1389,9 @@ async def get_station_charger_specs(
                     # If DB layer returned a string (ISO) try to parse it.
                     try:
                         last_charger_update_dt = datetime.fromisoformat(str(last_charger_update))
+                        # Treat naive provider timestamps as UTC to avoid arithmetic errors
+                        if last_charger_update_dt.tzinfo is None:
+                            last_charger_update_dt = last_charger_update_dt.replace(tzinfo=timezone.utc)
                     except Exception:
                         # Could not parse — leave as None which triggers API call
                         last_charger_update_dt = None
