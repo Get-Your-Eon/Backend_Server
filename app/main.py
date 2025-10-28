@@ -1402,12 +1402,37 @@ async def get_station_charger_specs(
                         last_charger_update_dt = None
 
             if last_charger_update_dt:
-                time_diff = (now - last_charger_update_dt).total_seconds() / 60  # 분 단위
-                if time_diff <= 30:
-                    print(f"✅ 충전기 데이터가 최신임 (갱신 후 {time_diff:.1f}분), DB의 동적 데이터 사용")
-                    need_api_call = False
+                # Compute difference in minutes robustly: ensure both sides are timezone-aware
+                def _ensure_aware(dt_val):
+                    try:
+                        if isinstance(dt_val, datetime):
+                            if dt_val.tzinfo is None:
+                                return dt_val.replace(tzinfo=timezone.utc)
+                            return dt_val
+                        return None
+                    except Exception:
+                        return None
+
+                time_diff = None
+                try:
+                    now_aware = _ensure_aware(now) or now
+                    other_aware = _ensure_aware(last_charger_update_dt) or last_charger_update_dt
+                    # final defensive attempt: coerce to timestamps if subtraction fails
+                    try:
+                        time_diff = (now_aware - other_aware).total_seconds() / 60
+                    except Exception:
+                        time_diff = (float(now_aware.timestamp()) - float(other_aware.timestamp())) / 60
+                except Exception as td_err:
+                    print(f"⚠️ 시간 차 계산 중 예외: {td_err} now={now} other={last_charger_update_dt}")
+
+                if time_diff is not None:
+                    if time_diff <= 30:
+                        print(f"✅ 충전기 데이터가 최신임 (갱신 후 {time_diff:.1f}분), DB의 동적 데이터 사용")
+                        need_api_call = False
+                    else:
+                        print(f"✅ 충전기 데이터가 오래됨 (갱신 후 {time_diff:.1f}분), API 호출 필요")
                 else:
-                    print(f"✅ 충전기 데이터가 오래됨 (갱신 후 {time_diff:.1f}분), API 호출 필요")
+                    print("⚠️ 충전기 최신 업데이트 시간 비교 불가 - 안전을 위해 API 호출 진행")
             else:
                 print("✅ 충전기 최신 업데이트 없음(첫 조회 또는 DB에 충전기 데이터 없음 또는 파싱 실패), API 호출 필요")
 
