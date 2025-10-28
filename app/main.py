@@ -5,7 +5,7 @@ import os
 
 from fastapi import FastAPI, Depends, HTTPException, status, APIRouter, Response, Header, Body, Query, Path
 from typing import Optional
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.openapi.docs import get_swagger_ui_html, get_redoc_html
@@ -16,6 +16,7 @@ from redis.asyncio import Redis
 import httpx
 import math
 import json
+import re
 
 # 프로젝트 내부 모듈 임포트
 from app.core.config import settings
@@ -578,14 +579,14 @@ async def search_ev_stations_requirement_compliant(
 
                             # Use PostGIS location column. Some DBs don't have lat/long columns.
                             insert_sql = """
-                                INSERT INTO stations (cs_id, address, name, location, raw_data, stat_update_datetime)
+                                INSERT INTO stations (cs_id, address, name, location, raw_data, last_synced_at)
                                 VALUES (:cs_id, :address, :name, ST_SetSRID(ST_MakePoint(:longi, :lat), 4326), :raw_data, :update_time)
                                 ON CONFLICT (cs_id) DO UPDATE SET
                                     address = EXCLUDED.address,
                                     name = EXCLUDED.name,
                                     location = EXCLUDED.location,
                                     raw_data = EXCLUDED.raw_data,
-                                    stat_update_datetime = EXCLUDED.stat_update_datetime
+                                    last_synced_at = EXCLUDED.last_synced_at
                             """
                             
                             await db.execute(text(insert_sql), {
@@ -748,14 +749,14 @@ async def _ensure_station_db_id(db: AsyncSession, cs_id: str, item: dict = None,
             now = datetime.now(timezone.utc)
 
         insert_sql = """
-            INSERT INTO stations (cs_id, name, address, location, raw_data, stat_update_datetime)
+            INSERT INTO stations (cs_id, name, address, location, raw_data, last_synced_at)
             VALUES (:cs_id, :name, :address, ST_SetSRID(ST_MakePoint(:longi, :lat), 4326), :raw_data, :update_time)
             ON CONFLICT (cs_id) DO UPDATE SET
                 name = COALESCE(EXCLUDED.name, stations.name),
                 address = COALESCE(EXCLUDED.address, stations.address),
                 location = COALESCE(EXCLUDED.location, stations.location),
                 raw_data = COALESCE(EXCLUDED.raw_data, stations.raw_data),
-                stat_update_datetime = COALESCE(EXCLUDED.stat_update_datetime, stations.stat_update_datetime)
+                last_synced_at = COALESCE(EXCLUDED.last_synced_at, stations.last_synced_at)
             RETURNING id
         """
 
@@ -797,6 +798,74 @@ def _serialize_for_cache(obj):
         return [_serialize_for_cache(v) for v in obj]
     return obj
 
+
+def _parse_to_aware_datetime(val) -> Optional[datetime]:
+    """Normalize various datetime-like inputs to an aware datetime in UTC.
+
+    Accepts:
+    - None -> returns None
+    - datetime (naive or aware) -> returns aware datetime in UTC
+    - ISO-8601 string (with or without timezone, with trailing Z) -> parsed as UTC when tz absent
+    - compact string YYYYMMDDHHMMSS -> parsed as UTC
+    - numeric epoch seconds (int/float/str of digits) -> converted to UTC
+
+    Returns None if parsing fails.
+    """
+    if val is None:
+        return None
+
+    # If it's already a datetime
+    try:
+        if isinstance(val, datetime):
+            if val.tzinfo is None:
+                return val.replace(tzinfo=timezone.utc)
+            return val.astimezone(timezone.utc)
+    except Exception:
+        pass
+
+    s = str(val).strip()
+    if not s:
+        return None
+
+    # trailing Z -> convert to +00:00 for fromisoformat
+    if s.endswith("Z") and not s.endswith("+00:00"):
+        s = s[:-1] + "+00:00"
+
+    # Try ISO formats first
+    try:
+        parsed = datetime.fromisoformat(s)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        pass
+
+    # Try compact format YYYYMMDDHHMMSS
+    try:
+        parsed = datetime.strptime(s, "%Y%m%d%H%M%S")
+        return parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        pass
+
+    # Try numeric epoch seconds
+    try:
+        if re.fullmatch(r"\d+", s):
+            ts = int(s)
+            # if length looks like milliseconds, convert
+            if len(s) >= 13:
+                ts = ts / 1000.0
+            parsed = datetime.fromtimestamp(ts, tz=timezone.utc)
+            return parsed
+        # float-like
+        if re.fullmatch(r"\d+\.\d+", s):
+            ts = float(s)
+            parsed = datetime.fromtimestamp(ts, tz=timezone.utc)
+            return parsed
+    except Exception:
+        pass
+
+    return None
+
 @app.get("/api/v1/stations-kepco-2025", tags=["Station"], summary="🚀 KEPCO 2025 API - BRAND NEW")
 async def kepco_2025_new_api_implementation(
     lat: float = Query(..., description="위도 좌표", ge=-90, le=90),
@@ -820,166 +889,15 @@ async def kepco_2025_new_api_implementation(
     print(f"🚀 ABSOLUTE CONFIRMATION: This is the NEW CODE running!")
     print(f"🚀 Expected KEPCO URL: https://bigdata.kepco.co.kr/openapi/v1/EVchargeManage.do")
     
+    # This endpoint is deprecated in favor of the canonical `/api/v1/stations` handler.
+    # For compatibility we return a temporary redirect to the canonical endpoint
+    # preserving the query parameters. Clients should call `/api/v1/stations`.
     try:
-        # === 직접 KEPCO API 호출 (단순화) ===
-        from app.core.config import settings
-        
-        # 좌표 → 주소 변환 (Nominatim 역지오코딩 사용)
-        # 이전에 하드코딩된 '서울특별시 강남구' 때문에 입력 좌표와 무관하게 결과가 나오는 문제가 있었습니다.
-        # 여기서 실제로 lat/lon을 역지오코딩해서 KEPCO API의 addr 파라미터로 사용합니다.
-        try:
-            async with httpx.AsyncClient() as client:
-                nomi_resp = await client.get(
-                    "https://nominatim.openstreetmap.org/reverse",
-                    params={"lat": lat, "lon": lon, "format": "json", "addressdetails": 1, "accept-language": "ko"},
-                    headers={"User-Agent": "Codyssey-EV-App/1.0"},
-                    timeout=10.0
-                )
-                if nomi_resp.status_code == 200:
-                    nomi_json = nomi_resp.json()
-                    addr_comp = nomi_json.get("address", {}) if isinstance(nomi_json, dict) else {}
-                    city = addr_comp.get("city") or addr_comp.get("town") or ""
-                    district = addr_comp.get("borough") or addr_comp.get("suburb") or ""
-                    search_addr = f"{city} {district}".strip()
-                    if not search_addr:
-                        # fallback to display_name or coordinate string
-                        search_addr = nomi_json.get("display_name") if isinstance(nomi_json, dict) else f"{lat},{lon}"
-                else:
-                    search_addr = f"{lat},{lon}"
-        except Exception:
-            # Any failure in geocoding should not block KEPCO call; use coordinate fallback
-            search_addr = f"{lat},{lon}"
-        
-        # KEPCO API 설정
-        kepco_url = settings.EXTERNAL_STATION_API_BASE_URL
-        kepco_key = settings.EXTERNAL_STATION_API_KEY
-        
-        print(f"🚀 KEPCO URL: {kepco_url}")
-        print(f"🚀 KEPCO KEY: {kepco_key[:10] if kepco_key else 'None'}...")
-        print(f"🚀 Search Address: {search_addr}")
-        
-        if not kepco_url or not kepco_key:
-            print(f"🚨 KEPCO 설정 오류!")
-            raise HTTPException(status_code=500, detail="KEPCO API 설정 누락")
-        
-        # KEPCO API 직접 호출
-        async with httpx.AsyncClient() as client:
-            print(f"🚀 Calling KEPCO API...")
-            kepco_response = await client.get(
-                kepco_url,
-                params={
-                    "addr": search_addr,
-                    "apiKey": kepco_key,
-                    "returnType": "json"
-                },
-                timeout=30.0
-            )
-            
-            print(f"🚀 KEPCO Response Status: {kepco_response.status_code}")
-            
-            if kepco_response.status_code != 200:
-                print(f"🚨 KEPCO API 오류: {kepco_response.status_code}")
-                print(f"🚨 Response: {kepco_response.text}")
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"KEPCO API 오류: HTTP {kepco_response.status_code}"
-                )
-            
-            kepco_data = kepco_response.json()
-            print(f"🚀 KEPCO Data Type: {type(kepco_data)}")
-            print(f"🚀 KEPCO Data Keys: {kepco_data.keys() if isinstance(kepco_data, dict) else 'Not dict'}")
-        
-        # 거리 계산 함수
-        def calculate_distance(lat1, lon1, lat2, lon2):
-            try:
-                R = 6371000  # 지구 반지름(미터)
-                lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
-                dlat, dlon = lat2 - lat1, lon2 - lon1
-                a = math.sin(dlat/2)**2 + math.cos(lat1)*math.cos(lat2)*math.sin(dlon/2)**2
-                return R * 2 * math.asin(math.sqrt(a))
-            except:
-                return 999999
-        
-        # 데이터 처리
-        stations = []
-        if isinstance(kepco_data, dict) and "data" in kepco_data:
-            raw_data = kepco_data["data"]
-            print(f"🚀 Found {len(raw_data) if isinstance(raw_data, list) else 0} stations from KEPCO")
-            
-            if isinstance(raw_data, list):
-                # process all returned stations from KEPCO, then sort and limit
-                for item in raw_data:
-                    try:
-                        slat = float(item.get("lat", 0))
-                        slon = float(item.get("longi", 0))
-                        
-                        if slat == 0 or slon == 0:
-                            continue
-                        
-                        # 거리 확인
-                        dist = calculate_distance(lat, lon, slat, slon)
-                        # ensure numeric distance and use radius filter
-                        try:
-                            if dist is None:
-                                continue
-                            if dist > radius:
-                                continue
-                        except Exception:
-                            continue
-                        
-                        stations.append({
-                            "station_id": item.get("csId", ""),
-                            "station_name": item.get("csNm", ""),
-                            "address": item.get("addr", ""),
-                            "lat": slat,
-                            "lon": slon,
-                            "distance_m": int(dist),
-                            "charger_id": item.get("cpId", ""),
-                            "charger_name": item.get("cpNm", ""),
-                            "status": item.get("cpStat", ""),
-                            "type": item.get("chargeTp", "")
-                        })
-                    except Exception as item_error:
-                        print(f"🚨 Item processing error: {item_error}")
-                        continue
-        
-        # Deduplicate stations by station_id then sort and return
-        try:
-            stations = _dedupe_stations_by_id(stations)
-        except Exception:
-            pass
-
-        # 결과 정렬 및 반환: sort by numeric distance and then apply limit
-        try:
-            stations.sort(key=lambda x: int(x.get("distance_m") or 999999))
-        except Exception:
-            try:
-                stations.sort(key=lambda x: x.get("distance_m") or 999999)
-            except Exception:
-                pass
-        final_result = stations[:limit]
-        
-        print(f"🚀 Final result: {len(final_result)} stations")
-        
-        return {
-            "message": "🚀 KEPCO 2025 NEW API SUCCESS!",
-            "status": "kepco_2025_success",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "search_params": {
-                "lat": lat,
-                "lon": lon,
-                "radius": radius,
-                "search_address": search_addr
-            },
-            "result_info": {
-                "total_found": len(stations),
-                "returned": len(final_result)
-            },
-            "stations": final_result
-        }
+        target = f"/api/v1/stations?lat={lat}&lon={lon}&radius={radius}&page={page}&limit={limit}"
+        return RedirectResponse(url=target, status_code=307)
     except Exception as e:
-        print(f"🚨 KEPCO 2025 ERROR: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"KEPCO 검색 실패: {str(e)}")
+        print(f"⚠️ Redirect to /api/v1/stations failed: {e}")
+        raise HTTPException(status_code=500, detail="Internal redirect failed")
 
 
 # --- V1 API 라우터 포함 (일반 사용자 접근 가능) ---
@@ -1305,7 +1223,7 @@ async def get_station_charger_specs(
                 "lat": str(station_dict["lat"]),
                 "lon": str(station_dict["longi"]),
                 # keep last_updated as ISO for informational purposes
-                "last_updated": _dt_to_iso(station_dict.get("stat_update_datetime")),
+                "last_updated": _dt_to_iso(station_dict.get("last_updated")),
                 # keep raw DB value (may be datetime or string) for freshness check
                 "last_charger_update": station_dict.get("last_charger_update")
             }
@@ -1385,50 +1303,15 @@ async def get_station_charger_specs(
             now = datetime.now(timezone.utc)
             last_charger_update = station_info.get("last_charger_update")
 
-            # Normalize last_charger_update into a datetime object if possible.
-            last_charger_update_dt = None
-            if last_charger_update:
-                if isinstance(last_charger_update, datetime):
-                    # If the DB returned a naive datetime, treat it as UTC to avoid
-                    # arithmetic errors when comparing with timezone-aware 'now'.
-                    if last_charger_update.tzinfo is None:
-                        last_charger_update_dt = last_charger_update.replace(tzinfo=timezone.utc)
-                    else:
-                        last_charger_update_dt = last_charger_update
-                else:
-                    # If DB layer returned a string (ISO) try to parse it.
-                    try:
-                        parsed = datetime.fromisoformat(str(last_charger_update))
-                        if parsed.tzinfo is None:
-                            parsed = parsed.replace(tzinfo=timezone.utc)
-                        last_charger_update_dt = parsed
-                    except Exception:
-                        # Could not parse — leave as None which triggers API call
-                        last_charger_update_dt = None
+            # Parse to timezone-aware datetime (UTC) if possible
+            last_charger_update_dt = _parse_to_aware_datetime(last_charger_update)
 
             if last_charger_update_dt:
-                # Compute difference in minutes robustly: ensure both sides are timezone-aware
-                def _ensure_aware(dt_val):
-                    try:
-                        if isinstance(dt_val, datetime):
-                            if dt_val.tzinfo is None:
-                                return dt_val.replace(tzinfo=timezone.utc)
-                            return dt_val
-                        return None
-                    except Exception:
-                        return None
-
-                time_diff = None
                 try:
-                    now_aware = _ensure_aware(now) or now
-                    other_aware = _ensure_aware(last_charger_update_dt) or last_charger_update_dt
-                    # final defensive attempt: coerce to timestamps if subtraction fails
-                    try:
-                        time_diff = (now_aware - other_aware).total_seconds() / 60
-                    except Exception:
-                        time_diff = (float(now_aware.timestamp()) - float(other_aware.timestamp())) / 60
+                    time_diff = (now - last_charger_update_dt).total_seconds() / 60
                 except Exception as td_err:
                     print(f"⚠️ 시간 차 계산 중 예외: {td_err} now={now} other={last_charger_update_dt}")
+                    time_diff = None
 
                 if time_diff is not None:
                     if time_diff <= 30:
@@ -1628,14 +1511,14 @@ async def get_station_charger_specs(
                                                 try:
                                                     await _clear_db_transaction(db)
                                                     station_insert_sql = """
-                                                        INSERT INTO stations (cs_id, name, address, location, raw_data, stat_update_datetime)
+                                                        INSERT INTO stations (cs_id, name, address, location, raw_data, last_synced_at)
                                                         VALUES (:cs_id, :name, :address, ST_SetSRID(ST_MakePoint(:longi, :lat), 4326), :raw_data, :update_time)
                                                         ON CONFLICT (cs_id) DO UPDATE SET
                                                             name = EXCLUDED.name,
                                                             address = EXCLUDED.address,
                                                             location = EXCLUDED.location,
                                                             raw_data = EXCLUDED.raw_data,
-                                                            stat_update_datetime = EXCLUDED.stat_update_datetime
+                                                            last_synced_at = EXCLUDED.last_synced_at
                                                         RETURNING id
                                                     """
                                                     result = await db.execute(text(station_insert_sql), {
