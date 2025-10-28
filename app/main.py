@@ -265,7 +265,9 @@ async def search_ev_stations_new_test(
 async def search_ev_stations_requirement_compliant(
     lat: str = Query(..., description="사용자 위도 (string 타입)", regex=r"^-?\d+\.?\d*$"),
     lon: str = Query(..., description="사용자 경도 (string 타입)", regex=r"^-?\d+\.?\d*$"),
-    radius: int = Query(..., description="반경(m) - 500/1000/3000/5000/10000 기준", ge=100, le=10000),
+    radius: int = Query(..., description="반경(m) - 500,1000,1500,2000,2500,3000,5000,10000 기준", ge=100, le=10000),
+    page: int = Query(1, description="페이지 번호", ge=1),
+    limit: int = Query(20, description="페이지당 결과 수", ge=1, le=100),
     api_key: str = Depends(frontend_api_key_required),
     db: AsyncSession = Depends(get_async_session),
     redis_client: Redis = Depends(get_redis_client)
@@ -319,11 +321,12 @@ async def search_ev_stations_requirement_compliant(
         print(f"✅ 매핑된 주소: {addr}")
         
         # === 2단계: 반경 기준값 정규화 ===
-        # Use "이하" (less than or equal) mapping: 500이하→500, 1000이하→1000, 2000이하→2000, etc.
-        # buckets: 500, 1000, 2000, 3000, 5000, 10000 (meters)
-        # NOTE: keep this list small and canonical to reduce cache fragmentation.
-        radius_standards = [500, 1000, 2000, 3000, 5000, 10000]
-        
+        # Use "이하" (less than or equal) mapping: map requested radius to
+        # the smallest canonical bucket that is >= requested value.
+        # New required buckets per product spec:
+        # 500, 1000, 1500, 2000, 2500, 3000, 5000, 10000 (meters)
+        radius_standards = [500, 1000, 1500, 2000, 2500, 3000, 5000, 10000]
+
         # Normalize the requested radius to an integer and find the smallest
         # canonical bucket that is >= the requested radius. This avoids
         # surprising mappings caused by float/string inputs.
@@ -337,13 +340,15 @@ async def search_ev_stations_requirement_compliant(
         
         # === 3단계: Cache 조회 ===
         # Use rounded coordinates in the cache key to avoid cache collisions caused
-        # by tiny floating differences. Use a configurable decimal precision so we
-        # can keep cache keys tightly scoped (e.g. 8 decimals -> ~0.001m precision).
-        coord_decimals = getattr(settings, "CACHE_COORD_ROUND_DECIMALS", 8)
+        # by tiny floating differences. We keep raw lat/lon (lat_float/lon_float)
+        # for distance calculations, but round the coordinates used in cache keys.
+        # Per product decision, use 2 decimal places (~1.11km) for cache keys.
+        coord_decimals = getattr(settings, "CACHE_COORD_ROUND_DECIMALS", 2)
         lat_round = round(lat_float, coord_decimals)
         lon_round = round(lon_float, coord_decimals)
         # Use coordinate-first key (avoid addr text differences)
-        cache_key = f"stations:lat{lat_round}:lon{lon_round}:r{actual_radius}"
+        # include pagination in cache key so different pages/limits are cached separately
+        cache_key = f"stations:lat{lat_round}:lon{lon_round}:r{actual_radius}:p{page}:l{limit}"
 
         try:
             cached_data = await redis_client.get(cache_key)
@@ -354,13 +359,16 @@ async def search_ev_stations_requirement_compliant(
                 # 거리 필터링 후 반환
                 filtered_stations = []
                 for station in cached_result.get("stations", []):
+                    # cached station contains only static fields (no distance_m)
                     dist = calculate_distance_haversine(
                         lat_float, lon_float,
                         float(station["lat"]), float(station["lon"])
                     )
                     if dist <= radius:
-                        station["distance_m"] = str(int(dist))
-                        filtered_stations.append(station)
+                        # avoid mutating cached object
+                        station_out = dict(station)
+                        station_out["distance_m"] = str(int(dist))
+                        filtered_stations.append(station_out)
                 
                 filtered_stations.sort(key=lambda x: int(x["distance_m"]))
                 
@@ -401,7 +409,7 @@ async def search_ev_stations_requirement_compliant(
                       :radius_m
                   )
                 ORDER BY distance_m
-                LIMIT 100
+                LIMIT :limit OFFSET :offset
             """
 
             # Fallback query when spatial support is unavailable
@@ -417,14 +425,15 @@ async def search_ev_stations_requirement_compliant(
                 WHERE (COALESCE(address, '') LIKE :addr_pattern OR COALESCE(name, '') LIKE :addr_pattern)
                 AND location IS NOT NULL
                 ORDER BY distance_m
-                LIMIT 100
+                LIMIT :limit OFFSET :offset
             """
 
             try:
                 # pass the normalized radius to the spatial query
+                offset = (page - 1) * limit
                 result = await db.execute(
                     text(spatial_query),
-                    {"lon": lon_float, "lat": lat_float, "radius_m": actual_radius}
+                    {"lon": lon_float, "lat": lat_float, "radius_m": actual_radius, "limit": limit, "offset": offset}
                 )
             except Exception:
                 # If spatial query fails (no PostGIS or column differences), fallback
@@ -482,9 +491,10 @@ async def search_ev_stations_requirement_compliant(
                     
                     # Cache에 저장
                     try:
-                        # don't cache empty results
+                        # don't cache empty results; when caching, exclude dynamic fields
                         if db_result:
-                            cache_data = {"stations": _serialize_for_cache(db_result), "timestamp": datetime.now(timezone.utc).isoformat()}
+                            cache_stations = [{k: v for k, v in s.items() if k != "distance_m"} for s in db_result]
+                            cache_data = {"stations": _serialize_for_cache(cache_stations), "timestamp": datetime.now(timezone.utc).isoformat()}
                             await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(_serialize_for_cache(cache_data), ensure_ascii=False))
                             print(f"✅ DB 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
                         else:
@@ -631,7 +641,9 @@ async def search_ev_stations_requirement_compliant(
         try:
             # Avoid caching empty API results
             if api_stations:
-                cache_data = {"stations": _serialize_for_cache(api_stations), "timestamp": now.isoformat()}
+                # when caching API results, exclude dynamic distance_m (will be computed per request)
+                cache_stations = [{k: v for k, v in s.items() if k != "distance_m"} for s in api_stations]
+                cache_data = {"stations": _serialize_for_cache(cache_stations), "timestamp": now.isoformat()}
                 await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(_serialize_for_cache(cache_data), ensure_ascii=False))
                 print(f"✅ API 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
             else:
