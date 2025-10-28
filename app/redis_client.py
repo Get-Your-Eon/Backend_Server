@@ -16,10 +16,34 @@ async def init_redis_pool():
             decode_responses=True,
         )
         await redis_pool.ping()
-        print(f"✅ Redis connected ({settings.REDIS_HOST}:{settings.REDIS_PORT})")
+        try:
+            info = await redis_pool.info()
+            # pick a few helpful fields for startup logs
+            mem = info.get("used_memory_human") or info.get("used_memory")
+            clients = info.get("connected_clients")
+            role = info.get("role")
+            print(f"✅ Redis connected ({settings.REDIS_HOST}:{settings.REDIS_PORT}) role={role} clients={clients} mem={mem}")
+        except Exception:
+            print(f"✅ Redis connected ({settings.REDIS_HOST}:{settings.REDIS_PORT}) (info unavailable)")
     except Exception as e:
         print(f"❌ Redis connection failed ({settings.REDIS_HOST}:{settings.REDIS_PORT}): {e}")
         redis_pool = None
+
+
+async def get_redis_info() -> dict:
+    """Return a small subset of INFO for debugging (best-effort)."""
+    if redis_pool is None:
+        return {"ok": False, "error": "no_redis_client"}
+    try:
+        info = await redis_pool.info()
+        return {
+            "ok": True,
+            "role": info.get("role"),
+            "used_memory_human": info.get("used_memory_human"),
+            "connected_clients": info.get("connected_clients"),
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 async def close_redis_pool():
     global redis_pool
