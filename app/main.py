@@ -194,9 +194,11 @@ async def subsidy_lookup(manufacturer: str, model_group: str, db: AsyncSession =
             tot = m.get("subsidy_total_10k_won")
             mapped.append({
                 "model_name": m.get("model_name"),
-                "subsidy_national": int(nat) if nat is not None else None,
-                "subsidy_local": int(loc) if loc is not None else None,
-                "subsidy_total": int(tot) if tot is not None else None,
+            "subsidy_national": int(nat) if nat is not None else None,
+            "subsidy_local": int(loc) if loc is not None else None,
+            "subsidy_total": int(tot) if tot is not None else None,
+            # sale_price may be null; expose as integer when present
+            "salePrice": int(m.get("sale_price")) if m.get("sale_price") is not None else None,
             })
 
         return JSONResponse(status_code=200, content=mapped)
@@ -232,9 +234,11 @@ async def subsidy_lookup_camel(manufacturer: str, modelGroup: str, db: AsyncSess
             tot = m.get("subsidy_total_10k_won")
             mapped.append({
                 "model_name": m.get("model_name"),
-                "subsidy_national": int(nat) if nat is not None else None,
-                "subsidy_local": int(loc) if loc is not None else None,
-                "subsidy_total": int(tot) if tot is not None else None,
+            "subsidy_national": int(nat) if nat is not None else None,
+            "subsidy_local": int(loc) if loc is not None else None,
+            "subsidy_total": int(tot) if tot is not None else None,
+            # include salePrice for frontend compatibility (may be None)
+            "salePrice": int(m.get("sale_price")) if m.get("sale_price") is not None else None,
             })
 
         return JSONResponse(status_code=200, content=mapped)
