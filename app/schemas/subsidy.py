@@ -1,7 +1,7 @@
 # app/schemas/subsidy.py (만원 단위 반영, 오류 수정 완료)
 
 from pydantic import BaseModel, Field, conint
-from typing import List
+from typing import List, Optional
 
 # --- 1. 요청 스키마 (Input) ---
 class SubsidyRequest(BaseModel):
@@ -16,6 +16,8 @@ class SubsidyPublic(BaseModel):
     subsidy_national_10k_won: conint(ge=0) = Field(..., description="국고 보조금 (단위: 만 원)")
     subsidy_local_10k_won: conint(ge=0) = Field(..., description="지자체 보조금 (단위: 만 원)")
     subsidy_total_10k_won: conint(ge=0) = Field(..., description="총 보조금 (단위: 만 원)")
+    # 판매가(원) - DB에서는 NULL 허용
+    sale_price: Optional[int] = Field(None, description="판매가(원)")
 
     class Config:
         from_attributes = True  # ORM 객체를 직렬화할 때 사용

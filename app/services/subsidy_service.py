@@ -42,7 +42,8 @@ class SubsidyService:
                 model_name=s.model_name,
                 subsidy_national_10k_won=s.subsidy_national_10k_won,
                 subsidy_local_10k_won=s.subsidy_local_10k_won,
-                subsidy_total_10k_won=s.subsidy_total_10k_won
+                subsidy_total_10k_won=s.subsidy_total_10k_won,
+                sale_price=s.sale_price if hasattr(s, 'sale_price') else None
             )
             for s in subsidies
         ]

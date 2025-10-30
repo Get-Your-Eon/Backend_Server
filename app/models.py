@@ -117,3 +117,5 @@ class Subsidy(Base):
     subsidy_national_10k_won = Column(Integer, nullable=False)
     subsidy_local_10k_won = Column(Integer, nullable=False)
     subsidy_total_10k_won = Column(Integer, nullable=False)
+    # 판매가(원) — nullable to match Alembic migration that added this column
+    sale_price = Column(Integer, nullable=True)
