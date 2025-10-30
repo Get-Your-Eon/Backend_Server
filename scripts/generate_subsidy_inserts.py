@@ -61,6 +61,8 @@ def generate(sql_out: Path, csv_path: Path, filter_by_categories: bool = True):
             nat = parse_int(r.get('국비(만원)') or r.get('national') or r.get('국비') or r.get('국비(만원)'))
             loc = parse_int(r.get('지방비(만원)') or r.get('local') or r.get('지방비') or r.get('지방비(만원)'))
             tot = parse_int(r.get('보조금(만원)') or r.get('total') or r.get('보조금') or r.get('보조금(만원)'))
+            # optional sale price (원) column support
+            sale = parse_int(r.get('salePrice') or r.get('sale_price') or r.get('salePrice(원)') or r.get('sale_price_won'))
             if tot is None and nat is not None and loc is not None:
                 tot = nat + loc
 
@@ -100,6 +102,7 @@ def generate(sql_out: Path, csv_path: Path, filter_by_categories: bool = True):
                 'national': nat if nat is not None else 'NULL',
                 'local': loc if loc is not None else 'NULL',
                 'total': tot if tot is not None else 'NULL',
+                'sale_price': sale if sale is not None else 'NULL',
             })
 
     # write SQL
@@ -113,14 +116,19 @@ def generate(sql_out: Path, csv_path: Path, filter_by_categories: bool = True):
             nat = r['national']
             loc = r['local']
             tot = r['total']
-
+            sale_price = r.get('sale_price', 'NULL')
             out.write(f"-- {manu} | {mg} | {mn}\n")
             out.write("DELETE FROM subsidies WHERE manufacturer = E'" + manu + "' AND model_group = E'" + mg + "' AND model_name = E'" + mn + "';\n")
-            out.write("INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES ("
-                      + "E'" + manu + "', E'" + mg + "', E'" + mn + "', "
-                      + (str(nat) if isinstance(nat, int) else 'NULL') + ", "
-                      + (str(loc) if isinstance(loc, int) else 'NULL') + ", "
-                      + (str(tot) if isinstance(tot, int) else 'NULL') + ");\n\n")
+            # Always include sale_price column (use NULL when not provided)
+            sale_sql_val = str(sale_price) if isinstance(sale_price, int) else 'NULL'
+            out.write(
+                "INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won, sale_price) VALUES ("
+                + "E'" + manu + "', E'" + mg + "', E'" + mn + "', "
+                + (str(nat) if isinstance(nat, int) else 'NULL') + ", "
+                + (str(loc) if isinstance(loc, int) else 'NULL') + ", "
+                + (str(tot) if isinstance(tot, int) else 'NULL') + ", "
+                + sale_sql_val + ");\n\n"
+            )
 
         out.write("-- ensure sequence is set to max id\n")
         out.write("SELECT setval('subsidies_id_seq', COALESCE((SELECT MAX(id) FROM subsidies), 1), true);\n")

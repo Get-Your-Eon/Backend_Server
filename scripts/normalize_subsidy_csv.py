@@ -14,6 +14,7 @@ from pathlib import Path
 import csv
 import re
 import sys
+import shutil
 
 
 car_categories = {
@@ -119,38 +120,61 @@ def main():
         sys.exit(2)
 
     bak = root / 'subsidy.csv.bak'
+    # Create a backup copy of the original CSV if one does not already exist.
+    # The previous implementation used Path.replace() twice which moved the
+    # file and then moved it back (effectively leaving no backup). Use a
+    # safe copy so original is preserved.
     if not bak.exists():
-        csv_path.replace(bak)
-        # restore original to work on
-        bak.replace(csv_path)
-    else:
-        # if backup already exists, still read original
-        pass
+        try:
+            shutil.copy2(csv_path, bak)
+        except Exception as e:
+            print(f"⚠️ Failed to create subsidy.csv backup: {e}", file=sys.stderr)
 
     rows = []
+    sale_idx = None
     with csv_path.open('r', encoding='utf-8') as fh:
         reader = csv.reader(fh)
         header = next(reader, None)
+
+        # detect optional sale price column in header (various common names)
+        if header:
+            for idx, col in enumerate(header):
+                n = (col or '').strip().lower()
+                if n in ('saleprice', 'sale_price', 'saleprice(원)', 'sale_price_won', 'saleprice(원)'):
+                    sale_idx = idx
+                    break
+
         for i, r in enumerate(reader, start=2):
+            # require at least the core 6 columns (차종,제조사,모델명,국비,지방비,보조금)
             if len(r) < 6:
                 # try to skip or pad
                 print(f'line {i} has {len(r)} columns, skipping', file=sys.stderr)
                 continue
-            # original columns: 차종,제조사,모델명,국비,지방비,보조금
+            # original columns expected: 차종,제조사,모델명,국비,지방비,보조금
             manu = r[1].strip()
             model_name = r[2].strip()
             nat = r[3].strip()
             loc = r[4].strip()
             tot = r[5].strip()
             mg = find_model_group(manu, model_name)
-            rows.append((manu, mg, model_name, nat, loc, tot))
+            if sale_idx is not None and sale_idx < len(r):
+                sale_val = r[sale_idx].strip()
+            else:
+                sale_val = ''
+            rows.append((manu, mg, model_name, nat, loc, tot, sale_val))
 
     out_path = csv_path
     with out_path.open('w', encoding='utf-8', newline='') as out:
         writer = csv.writer(out)
-        writer.writerow(['제조사', '모델그룹', '모델명', '국비(만원)', '지방비(만원)', '보조금(만원)'])
-        for r in rows:
-            writer.writerow(r)
+        # preserve salePrice column if present in input
+        if sale_idx is not None:
+            writer.writerow(['제조사', '모델그룹', '모델명', '국비(만원)', '지방비(만원)', '보조금(만원)', 'salePrice'])
+            for r in rows:
+                writer.writerow(r)
+        else:
+            writer.writerow(['제조사', '모델그룹', '모델명', '국비(만원)', '지방비(만원)', '보조금(만원)'])
+            for (manu, mg, model_name, nat, loc, tot, _sale) in rows:
+                writer.writerow((manu, mg, model_name, nat, loc, tot))
 
     # report unmatched
     unmatched = [r for r in rows if r[1] == '']
