@@ -453,8 +453,9 @@ DELETE FROM subsidies WHERE manufacturer = E'비와이디코리아' AND model_gr
 INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES (E'비와이디코리아', E'ATTO 3', E'BYD ATTO 3', 145, 75, 220);
 
 -- 비와이디코리아 | SEAL | byd seal dynamic awd
-DELETE FROM subsidies WHERE manufacturer = E'비와이디코리아' AND model_group = E'SEAL' AND model_name = E'byd seal dynamic awd';
-INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES (E'비와이디코리아', E'SEAL', E'byd seal dynamic awd', 178, 92, 270);
+-- 비와이디코리아 | SEAL | BYD SEAL Dynamic awd
+DELETE FROM subsidies WHERE manufacturer = E'비와이디코리아' AND model_group = E'SEAL' AND model_name = E'BYD SEAL Dynamic awd';
+INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES (E'비와이디코리아', E'SEAL', E'BYD SEAL Dynamic awd', 178, 92, 270);
 
 -- ensure sequence is set to max id
 SELECT setval('subsidies_id_seq', COALESCE((SELECT MAX(id) FROM subsidies), 1), true);

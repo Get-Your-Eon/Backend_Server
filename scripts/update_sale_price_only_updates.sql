@@ -114,6 +114,6 @@ UPDATE subsidies SET sale_price = 71900000 WHERE model_name = 'Polestar 4 Long R
 UPDATE subsidies SET sale_price = 47520000 WHERE model_name = '볼보 EX30 Single Motor ER' AND (sale_price IS NULL OR sale_price <> 47520000);
 UPDATE subsidies SET sale_price = 51790000 WHERE model_name = '볼보 EX 30cc Twin' AND (sale_price IS NULL OR sale_price <> 51790000);
 UPDATE subsidies SET sale_price = 31500000 WHERE model_name = 'BYD ATTO 3' AND (sale_price IS NULL OR sale_price <> 31500000);
-UPDATE subsidies SET sale_price = 46900000 WHERE model_name = 'byd seal dynamic awd' AND (sale_price IS NULL OR sale_price <> 46900000);
+UPDATE subsidies SET sale_price = 46900000 WHERE model_name = 'BYD SEAL Dynamic awd' AND (sale_price IS NULL OR sale_price <> 46900000);
 
 COMMIT;
