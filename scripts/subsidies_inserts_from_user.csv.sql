@@ -433,16 +433,16 @@ DELETE FROM subsidies WHERE manufacturer = E'케이지모빌리티' AND model_gr
 INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES (E'케이지모빌리티', E'토레스 EVX', E'토레스 EVX 20인치', 354, 183, 537);
 
 -- 폴스타오토모티브코리아 | Polestar 4 | Polestar 4 Long Range Single Motor
-DELETE FROM subsidies WHERE manufacturer = E'폴스타오토모티브코리아' AND model_group = E'Polestar 4' AND model_name = E'Polestar 4 Long Range Single Motor';
-INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES (E'폴스타오토모티브코리아', E'Polestar 4', E'Polestar 4 Long Range Single Motor', 181, 93, 274);
+DELETE FROM subsidies WHERE manufacturer = E'폴스타오토모티브코리아' AND model_group = E'Polestar 4' AND model_name = E'Polestar 4 Long Range Single Motor 20인치';
+INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES (E'폴스타오토모티브코리아', E'Polestar 4', E'Polestar 4 Long Range Single Motor 20인치', 181, 93, 274);
 
 -- 폴스타오토모티브코리아 | Polestar 4 | Polestar 4 Long Range Dual Motor 22인치
-DELETE FROM subsidies WHERE manufacturer = E'폴스타오토모티브코리아' AND model_group = E'Polestar 4' AND model_name = E'Polestar 4 Long Range Dual Motor 22인치';
-INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES (E'폴스타오토모티브코리아', E'Polestar 4', E'Polestar 4 Long Range Dual Motor 22인치', 141, 72, 213);
+DELETE FROM subsidies WHERE manufacturer = E'폴스타오토모티브코리아' AND model_group = E'Polestar 4' AND model_name = E'Polestar 4 Long Range Dual Motor 22인치 performance';
+INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES (E'폴스타오토모티브코리아', E'Polestar 4', E'Polestar 4 Long Range Dual Motor 22인치 performance', 141, 72, 213);
 
 -- 폴스타오토모티브코리아 | Polestar 4 | Polestar 4 Long Range Dual Motor 20*21인치
-DELETE FROM subsidies WHERE manufacturer = E'폴스타오토모티브코리아' AND model_group = E'Polestar 4' AND model_name = E'Polestar 4 Long Range Dual Motor 20*21인치';
-INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES (E'폴스타오토모티브코리아', E'Polestar 4', E'Polestar 4 Long Range Dual Motor 20*21인치', 168, 86, 254);
+DELETE FROM subsidies WHERE manufacturer = E'폴스타오토모티브코리아' AND model_group = E'Polestar 4' AND model_name = E'Polestar 4 Long Range Dual Motor 20인치';
+INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES (E'폴스타오토모티브코리아', E'Polestar 4', E'Polestar 4 Long Range Dual Motor 20인치', 168, 86, 254);
 
 -- 볼보자동차코리아 | EX30 | 볼보 EX30 Single Motor ER
 DELETE FROM subsidies WHERE manufacturer = E'볼보자동차코리아' AND model_group = E'EX30' AND model_name = E'볼보 EX30 Single Motor ER';
@@ -457,8 +457,9 @@ DELETE FROM subsidies WHERE manufacturer = E'비와이디코리아' AND model_gr
 INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES (E'비와이디코리아', E'ATTO 3', E'BYD ATTO 3', 145, 75, 220);
 
 -- 비와이디코리아 | SEAL | byd seal dynamic awd
-DELETE FROM subsidies WHERE manufacturer = E'비와이디코리아' AND model_group = E'SEAL' AND model_name = E'byd seal dynamic awd';
-INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES (E'비와이디코리아', E'SEAL', E'byd seal dynamic awd', 178, 92, 270);
+-- 비와이디코리아 | SEAL | BYD SEAL Dynamic awd
+DELETE FROM subsidies WHERE manufacturer = E'비와이디코리아' AND model_group = E'SEAL' AND model_name = E'BYD SEAL Dynamic awd';
+INSERT INTO subsidies (manufacturer, model_group, model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won) VALUES (E'비와이디코리아', E'SEAL', E'BYD SEAL Dynamic awd', 178, 92, 270);
 
 -- ensure sequence is set to max id
 SELECT setval('subsidies_id_seq', COALESCE((SELECT MAX(id) FROM subsidies), 1), true);
