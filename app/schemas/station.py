@@ -51,7 +51,7 @@ class StationSearchRequest(BaseModel):
     """Request schema for station search by location"""
     lat: float = Field(..., description="User latitude", ge=-90, le=90)
     lon: float = Field(..., description="User longitude", ge=-180, le=180)
-    radius: int = Field(1000, description="Search radius in meters", ge=100, le=10000)
+    radius: int = Field(3500, description="Search radius in meters (canonical buckets: 3500,7000,12000)", ge=100, le=12000)
 
 
 class StationSummary(BaseModel):
