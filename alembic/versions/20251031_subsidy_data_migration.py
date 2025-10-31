@@ -10,7 +10,7 @@ from sqlalchemy.sql import text
 
 # revision identifiers, used by Alembic.
 revision = '20251031_subsidy_data_migration'
-down_revision = None
+down_revision = '20251028_add_sale_price'
 branch_labels = None
 depends_on = None
 
