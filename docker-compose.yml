@@ -54,6 +54,23 @@ services:
     networks:
       - ev_charger_network
 
+  locust:
+    image: locustio/locust:2.20.0
+    container_name: ev_charger_locust
+    restart: unless-stopped
+    depends_on:
+      - api
+    volumes:
+      - ./locustfile.py:/mnt/locust/locustfile.py:ro
+    ports:
+      - "8089:8089"
+    environment:
+      - LOCUST_HEALTH_PATH=/health
+      - LOCUST_EXTRA_PATHS=/, /stations
+    command: -f /mnt/locust/locustfile.py --host http://api:8000
+    networks:
+      - ev_charger_network
+
 volumes:
   redis_data:
     driver: local
