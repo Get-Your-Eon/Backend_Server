@@ -8,8 +8,8 @@
 # OLD (wrong): /ws/chargePoint/curChargePoint?api_key=...
 # NEW (correct): /EVchargeManage.do?addr=...&apiKey=...&returnType=json
 #
-# LOCAL TEST: ✅ Works correctly
-# RENDER: ❌ Still using old cached version
+# LOCAL TEST: Works correctly
+# RENDER: Still using old cached version
 #
 # This deployment should resolve the caching issue.
 

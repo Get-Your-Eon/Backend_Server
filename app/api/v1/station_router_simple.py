@@ -14,7 +14,7 @@ router = APIRouter()
 async def search_stations(
     lat: float = Query(..., description="Latitude (required)", ge=-90, le=90),
     lon: float = Query(..., description="Longitude (required)", ge=-180, le=180), 
-    radius: int = Query(..., description="Search radius in meters (required) - 3500,7000,12000", ge=100, le=12000),
+    radius: int = Query(..., description="Search radius in meters (required) - 5000,10000,15000", ge=100, le=15000),
     page: int = Query(1, description="Page number", ge=1),
     limit: int = Query(20, description="Results per page", ge=1, le=100),
     _: bool = Depends(frontend_api_key_required)

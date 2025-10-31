@@ -18,8 +18,12 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    """Upgrade schema safely."""
-    # api_logs 테이블 생성 (존재하지 않을 경우만)
+    """Perform a safe schema upgrade.
+
+    Create tables and indexes if they do not already exist. This migration is
+    idempotent and safe to run multiple times.
+    """
+    # Create api_logs table if it does not exist
     op.execute("""
     CREATE TABLE IF NOT EXISTS api_logs (
         id SERIAL PRIMARY KEY,
@@ -33,7 +37,7 @@ def upgrade() -> None:
         response_time_ms FLOAT
     );
     """)
-    # api_logs 인덱스 안전하게 생성
+    # Create api_logs indexes if missing
     op.execute("""
     DO $$
     BEGIN
@@ -43,7 +47,7 @@ def upgrade() -> None:
     END$$;
     """)
 
-    # stations 테이블 생성
+    # Create stations table if it does not exist
     op.execute("""
     CREATE TABLE IF NOT EXISTS stations (
         id SERIAL PRIMARY KEY,
@@ -56,7 +60,7 @@ def upgrade() -> None:
         updated_at TIMESTAMP NOT NULL DEFAULT now()
     );
     """)
-    # stations 인덱스 안전하게 생성
+    # Create stations indexes if missing
     op.execute("""
     DO $$
     BEGIN
@@ -72,7 +76,7 @@ def upgrade() -> None:
     END$$;
     """)
 
-    # chargers 테이블 생성
+    # Create chargers table if it does not exist
     op.execute("""
     CREATE TABLE IF NOT EXISTS chargers (
         id SERIAL PRIMARY KEY,
@@ -86,7 +90,7 @@ def upgrade() -> None:
         updated_at TIMESTAMP NOT NULL DEFAULT now()
     );
     """)
-    # chargers 인덱스 안전하게 생성
+    # Create chargers indexes if missing
     op.execute("""
     DO $$
     BEGIN
@@ -101,8 +105,12 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Downgrade schema safely."""
-    # 테이블 삭제 시 CASCADE 적용
+    """Reverse the upgrade by dropping the created tables.
+
+    Drops use CASCADE to ensure dependent objects are removed. This is a
+    destructive operation and should be used with care.
+    """
+    # Drop tables with CASCADE
     op.execute("DROP TABLE IF EXISTS chargers CASCADE;")
     op.execute("DROP TABLE IF EXISTS stations CASCADE;")
     op.execute("DROP TABLE IF EXISTS api_logs CASCADE;")

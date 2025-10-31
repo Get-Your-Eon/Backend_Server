@@ -1,10 +1,10 @@
 # app/schemas/__init__.py
 from .station import (
     StationPublic,
-    StationListResponse,       # ✅ 추가
+    StationListResponse,       # added
     ChargerBase,
     ChargerStatusUpdate,
-    ChargerListResponse        # ✅ 추가
+    ChargerListResponse        # added
 )
 from .subsidy import (
     SubsidyRequest,

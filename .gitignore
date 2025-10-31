@@ -1,5 +1,5 @@
 # --------------------------
-# Python / FastAPI 관련
+# Python / FastAPI related
 # --------------------------
 __pycache__/
 *.py[cod]
@@ -12,7 +12,7 @@ __pycache__/
 *.pyc
 
 # --------------------------
-# 환경 설정 파일
+# Environment configuration files
 # --------------------------
 .env
 .env.local
@@ -22,7 +22,7 @@ __pycache__/
 .env.production
 
 # --------------------------
-# IDE / 편집기
+# IDE / Editor
 # --------------------------
 .vscode/
 .idea/
@@ -44,7 +44,7 @@ docker-compose.yml
 *.pid
 
 # --------------------------
-# 캐시 / 빌드 / 패키지
+# Cache / build / packages
 # --------------------------
 build/
 dist/
@@ -55,7 +55,7 @@ dist/
 pip-wheel-metadata/
 
 # --------------------------
-# Node / Frontend (만약 포함될 경우)
+# Node / Frontend (if present)
 # --------------------------
 node_modules/
 npm-debug.log*
@@ -63,7 +63,7 @@ yarn-debug.log*
 yarn-error.log*
 
 # --------------------------
-# 환경별 파일
+# Environment-specific files
 # --------------------------
 /config/
 serverinfo.dat

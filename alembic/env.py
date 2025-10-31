@@ -4,24 +4,25 @@ import asyncio
 from dotenv import load_dotenv
 from logging.config import fileConfig
 
-# 동기 엔진 임포트 (마이그레이션이 동기 접속을 선호하므로 추가)
+# Import synchronous engine helpers (Alembic prefers sync connections)
 from sqlalchemy import create_engine, pool
 from alembic import context
 
 # ----------------------------------------------------
-# 1. 환경 설정 및 모델 임포트
+# 1. Configuration and model imports
 # ----------------------------------------------------
 
-# .env 파일 로드 (config에서 이미 했지만, alembic 단독 실행을 위해 유지)
+# Load .env file (the main app already does this, but keep it to allow
+# running alembic standalone)
 load_dotenv()
 
-# 프로젝트 루트 경로를 시스템 경로에 추가
+# Add project root to sys.path so that app modules can be imported
 sys.path.append(os.getcwd())
 
-# Base 모델 임포트: 구조 분석 결과, Base는 app.models에 있습니다.
+# Import Base model metadata (Base is defined in app.models)
 from app.models import Base
 
-# settings 객체 임포트: app.core.config에서 가져옵니다.
+# Import settings from application config
 from app.core.config import settings
 
 # Alembic Config 객체
@@ -32,33 +33,32 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # ----------------------------------------------------
-# 🌟 A. 동기 접속 URL 설정 (핵심 수정 부분)
+# A. Ensure Alembic uses a synchronous DB URL
 # ----------------------------------------------------
 db_url_from_ini = config.get_main_option("sqlalchemy.url")
 
-# settings.DATABASE_URL을 사용하여 Render DB URL을 직접 설정합니다.
-# If the value from alembic.ini is missing or empty, fall back to settings.DATABASE_URL
+# If alembic.ini does not contain a URL, fall back to settings.DATABASE_URL
 if not db_url_from_ini:
     # 🌟 [수정] settings에서 직접 DATABASE_URL을 가져와 사용
     db_url_from_ini = settings.DATABASE_URL
 
-# asyncpg 드라이버를 동기 드라이버로 변경합니다. (postgresql+asyncpg:// -> postgresql://)
-# Alembic은 동기 접속을 사용해야 합니다.
+# If the project DATABASE_URL uses the asyncpg driver prefix,
+# convert it to a sync URL for Alembic (postgresql+asyncpg:// -> postgresql://)
 if db_url_from_ini and db_url_from_ini.startswith("postgresql+asyncpg://"):
     db_url_from_ini = db_url_from_ini.replace("postgresql+asyncpg://", "postgresql://", 1)
 
 if db_url_from_ini:
-    # 혹시 모를 공백을 제거하고 sqlalchemy.url로 설정
+    # Trim whitespace and set sqlalchemy.url for Alembic
     config.set_main_option("sqlalchemy.url", db_url_from_ini.strip())
 
 
 # ----------------------------------------------------
-# 2. 메타데이터 설정 (기존 유지)
+# 2. Target metadata (keep existing behavior)
 # ----------------------------------------------------
 target_metadata = Base.metadata
 
 # ----------------------------------------------------
-# 3. 오프라인 마이그레이션 (기존 유지)
+# 3. Offline migration (keep existing behavior)
 # ----------------------------------------------------
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
@@ -74,22 +74,22 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 # ----------------------------------------------------
-# 4. PostGIS 안전 옵션 (autogenerate에서 무시할 객체) (기존 유지)
+# 4. PostGIS safety options (exclude system tables from autogenerate)
 # ----------------------------------------------------
 def include_object(object, name, type_, reflected, compare_to):
     """
-    Alembic autogenerate 시 PostGIS 시스템 테이블 무시
+    Exclude PostGIS system tables when running Alembic autogenerate.
     """
     if type_ == "table" and name in ("spatial_ref_sys", "geometry_columns", "geography_columns"):
-        print(f"[INFO] Alembic autogenerate 무시: {name}")
+        print(f"[INFO] Alembic autogenerate skip: {name}")
         return False
     return True
 
 # ----------------------------------------------------
-# 5. 마이그레이션 실행 (동기) (기존 유지)
+# 5. Run migrations synchronously (used by the sync runner)
 # ----------------------------------------------------
 def do_run_migrations(connection):
-    """동기식으로 Alembic 마이그레이션 실행"""
+    """Run Alembic migrations using a synchronous connection."""
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
@@ -99,20 +99,20 @@ def do_run_migrations(connection):
         context.run_migrations()
 
 # ----------------------------------------------------
-# 6. 비동기 마이그레이션 (🌟 내부 수정)
+# 6. Asynchronous migration helpers
 # ----------------------------------------------------
 async def run_async_migrations(connectable):
     """비동기 마이그레이션 실행 헬퍼"""
     async with connectable.connect() as connection:
-        print("[DEBUG] 비동기 연결 생성 완료, 마이그레이션 실행 중...")
+        print("[DEBUG] async connection opened, running migrations...")
         await connection.run_sync(do_run_migrations)
 
 async def run_migrations_online_async():
-    """비동기 DB 엔진을 생성하고 마이그레이션 실행"""
+    """Create an async DB engine and run migrations."""
 
     database_url = config.get_main_option("sqlalchemy.url")
 
-    # DB URL에 postgressql+asyncpg:// 드라이버 명시
+    # If the sync URL was provided, convert it back to an async URL
     if database_url and database_url.startswith("postgresql://"):
         async_db_url = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
     else:
@@ -157,17 +157,17 @@ async def run_migrations_online_async():
         await conn.run_sync(do_run_migrations)
 
     await connectable.dispose()
-    print("[DEBUG] 비동기 마이그레이션 완료, 엔진 종료")
+    print("[DEBUG] async migrations complete, engine disposed")
 
 # ----------------------------------------------------
-# 7. 온라인(비동기) 실행 래퍼 (기존 유지)
+# 7. Online (async) runner wrapper
 # ----------------------------------------------------
 def run_migrations_online() -> None:
     """Run migrations in 'online' (async) mode."""
     asyncio.run(run_migrations_online_async())
 
 # ----------------------------------------------------
-# 8. 실행 진입점 (기존 유지)
+# 8. Execution entry point
 # ----------------------------------------------------
 if context.is_offline_mode():
     run_migrations_offline()

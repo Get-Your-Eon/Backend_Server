@@ -22,11 +22,11 @@ async def init_redis_pool():
             mem = info.get("used_memory_human") or info.get("used_memory")
             clients = info.get("connected_clients")
             role = info.get("role")
-            print(f"✅ Redis connected ({settings.REDIS_HOST}:{settings.REDIS_PORT}) role={role} clients={clients} mem={mem}")
+            print(f"Redis connected ({settings.REDIS_HOST}:{settings.REDIS_PORT}) role={role} clients={clients} mem={mem}")
         except Exception:
-            print(f"✅ Redis connected ({settings.REDIS_HOST}:{settings.REDIS_PORT}) (info unavailable)")
+            print(f"Redis connected ({settings.REDIS_HOST}:{settings.REDIS_PORT}) (info unavailable)")
     except Exception as e:
-        print(f"❌ Redis connection failed ({settings.REDIS_HOST}:{settings.REDIS_PORT}): {e}")
+        print(f"Redis connection failed ({settings.REDIS_HOST}:{settings.REDIS_PORT}): {e}")
         redis_pool = None
 
 
