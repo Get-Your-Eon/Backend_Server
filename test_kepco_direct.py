@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
-KEPCO API 직접 테스트 스크립트
-- 로컬에서 KEPCO API 응답을 확인
-- Render 배포 버전과 비교하기 위함
+KEPCO API direct test script.
+
+This script queries the public KEPCO dataset and performs a few basic
+validations and summaries useful for local verification or comparing
+against the deployed Render instance.
 """
 
 import httpx
@@ -19,7 +21,7 @@ TEST_LAT = 37.374109692
 TEST_LON = 127.130205155
 
 def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    """두 좌표 간의 거리 계산 (미터)"""
+    """Compute the great-circle distance between two coordinates in meters."""
     import math
     
     # 지구 반지름 (km)
@@ -43,7 +45,7 @@ def calculate_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> fl
     return distance
 
 async def get_address_from_coordinates(lat: float, lon: float) -> str:
-    """좌표를 주소로 변환 (Nominatim 사용)"""
+    """Reverse-geocode coordinates using Nominatim and return a short address."""
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(
@@ -92,23 +94,23 @@ async def get_address_from_coordinates(lat: float, lon: float) -> str:
             
             return f"{lat},{lon}"
     except Exception as e:
-        print(f"⚠️ 주소 변환 실패: {e}")
+        print(f"Address reverse lookup failed: {e}")
         return f"{lat},{lon}"
 
 async def test_kepco_api():
-    """KEPCO API 직접 테스트"""
-    print("🧪 KEPCO API 직접 테스트 시작")
-    print(f"📍 테스트 좌표: {TEST_LAT}, {TEST_LON}")
+    """Run a few queries against the KEPCO dataset and summarize results."""
+    print("KEPCO API test start")
+    print(f"Test coordinates: {TEST_LAT}, {TEST_LON}")
     
-    # 1. 좌표를 주소로 변환
+    # 1. Reverse-geocode coordinates
     search_addr = await get_address_from_coordinates(TEST_LAT, TEST_LON)
-    print(f"🗺️ 변환된 주소: {search_addr}")
+    print(f"Resolved address: {search_addr}")
     
     # 2. KEPCO API 호출
     try:
         async with httpx.AsyncClient() as client:
-            print(f"🔗 KEPCO API 호출: {KEPCO_BASE_URL}")
-            print(f"📋 파라미터:")
+            print(f"Calling KEPCO API: {KEPCO_BASE_URL}")
+            print("Parameters:")
             print(f"   - addr: {search_addr}")
             print(f"   - apiKey: {KEPCO_API_KEY[:10]}...")
             print(f"   - returnType: json")
@@ -123,23 +125,23 @@ async def test_kepco_api():
                 timeout=30.0
             )
             
-            print(f"📡 응답 상태 코드: {response.status_code}")
-            print(f"📄 응답 헤더: {dict(response.headers)}")
+            print(f"Response status code: {response.status_code}")
+            print(f"Response headers: {dict(response.headers)}")
             
             if response.status_code == 200:
                 try:
                     data = response.json()
-                    print(f"✅ JSON 파싱 성공")
-                    print(f"📊 응답 데이터 구조:")
+                    print(f"JSON parsed successfully")
+                    print(f"Response data structure:")
                     print(json.dumps(data, indent=2, ensure_ascii=False))
                     
                     # 데이터 분석
                     if isinstance(data, list) and len(data) > 0:
-                        print(f"\n📈 데이터 분석:")
-                        print(f"   총 {len(data)}개 충전소 발견")
+                        print(f"\nData summary:")
+                        print(f"   Found {len(data)} charging stations")
                         
                         for i, item in enumerate(data[:3]):  # 처음 3개만 분석
-                            print(f"\n   충전소 {i+1}:")
+                            print(f"\n   Station {i+1}:")
                             for key, value in item.items():
                                 print(f"     {key}: {value}")
                                 
@@ -149,24 +151,24 @@ async def test_kepco_api():
                                     station_lat = float(item["lat"])
                                     station_lon = float(item["longi"])
                                     distance = calculate_distance(TEST_LAT, TEST_LON, station_lat, station_lon)
-                                    print(f"     계산된 거리: {distance:.1f}m")
+                                    print(f"     Computed distance: {distance:.1f}m")
                                 except:
                                     print(f"     거리 계산 실패")
                     else:
-                        print(f"⚠️ 예상과 다른 응답 구조: {type(data)}")
+                        print(f"Unexpected response structure: {type(data)}")
                         
                 except json.JSONDecodeError as e:
-                    print(f"❌ JSON 파싱 실패: {e}")
-                    print(f"📄 원본 응답 텍스트:")
+                    print(f"JSON parse failed: {e}")
+                    print("Original response text:")
                     print(response.text[:1000])
                     
             else:
-                print(f"❌ API 호출 실패")
-                print(f"📄 응답 내용:")
+                print(f"API call failed with status {response.status_code}")
+                print("Response body:")
                 print(response.text[:1000])
                 
     except Exception as e:
-        print(f"💥 KEPCO API 테스트 중 오류 발생: {e}")
+        print(f"Error while testing KEPCO API: {e}")
         import traceback
         traceback.print_exc()
 

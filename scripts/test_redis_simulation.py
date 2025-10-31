@@ -59,11 +59,11 @@ async def try_redis_connect():
         await init_redis_pool()
         client = await get_redis_client()
         if client:
-            print(f"✅ Connected to Redis ({settings.REDIS_HOST}:{settings.REDIS_PORT}) — ping OK")
+            print(f"Connected to Redis ({settings.REDIS_HOST}:{settings.REDIS_PORT}) — ping OK")
         else:
-            print(f"⚠️ init_redis_pool returned no client (redis_pool is None)")
+            print(f"init_redis_pool returned no client (redis_pool is None)")
     except Exception as e:
-        print(f"⚠️ Exception while init_redis_pool: {e}")
+        print(f"Exception while init_redis_pool: {e}")
 
 
 def simulate_cache_behavior():

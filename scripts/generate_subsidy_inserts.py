@@ -61,7 +61,7 @@ def generate(sql_out: Path, csv_path: Path, filter_by_categories: bool = True):
             nat = parse_int(r.get('국비(만원)') or r.get('national') or r.get('국비') or r.get('국비(만원)'))
             loc = parse_int(r.get('지방비(만원)') or r.get('local') or r.get('지방비') or r.get('지방비(만원)'))
             tot = parse_int(r.get('보조금(만원)') or r.get('total') or r.get('보조금') or r.get('보조금(만원)'))
-            # optional sale price (원) column support
+            # optional sale price (KRW) column support
             sale = parse_int(r.get('salePrice') or r.get('sale_price') or r.get('salePrice(원)') or r.get('sale_price_won'))
             if tot is None and nat is not None and loc is not None:
                 tot = nat + loc

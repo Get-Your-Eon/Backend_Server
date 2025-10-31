@@ -128,7 +128,7 @@ def main():
         try:
             shutil.copy2(csv_path, bak)
         except Exception as e:
-            print(f"⚠️ Failed to create subsidy.csv backup: {e}", file=sys.stderr)
+            print(f"Failed to create subsidy.csv backup: {e}", file=sys.stderr)
 
     rows = []
     sale_idx = None

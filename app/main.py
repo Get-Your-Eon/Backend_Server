@@ -250,7 +250,7 @@ async def subsidy_lookup_camel(manufacturer: str, modelGroup: str, db: AsyncSess
 async def search_ev_stations_new_test(
     lat: float = Query(..., description="위도", ge=-90, le=90),
     lon: float = Query(..., description="경도", ge=-180, le=180),
-    radius: int = Query(..., description="검색 반경(미터)", ge=100, le=12000),
+    radius: int = Query(..., description="검색 반경(미터)", ge=100, le=15000),
     page: int = Query(1, description="페이지 번호", ge=1),
     limit: int = Query(20, description="페이지당 결과 수", ge=1, le=100),
     api_key: str = Depends(frontend_api_key_required),
@@ -269,7 +269,7 @@ async def search_ev_stations_new_test(
 async def search_ev_stations_requirement_compliant(
     lat: str = Query(..., description="사용자 위도 (string 타입)", regex=r"^-?\d+\.?\d*$"),
     lon: str = Query(..., description="사용자 경도 (string 타입)", regex=r"^-?\d+\.?\d*$"),
-    radius: int = Query(..., description="반경(m) - 3500,7000,12000 기준", ge=100, le=12000),
+    radius: int = Query(..., description="반경(m) - 5000,10000,15000 기준", ge=100, le=15000),
     page: int = Query(1, description="페이지 번호", ge=1),
     limit: int = Query(20, description="페이지당 결과 수", ge=1, le=100),
     api_key: str = Depends(frontend_api_key_required),
@@ -328,8 +328,8 @@ async def search_ev_stations_requirement_compliant(
         # Use "이하" (less than or equal) mapping: map requested radius to
         # the smallest canonical bucket that is >= requested value.
         # New required buckets per product spec:
-        # 3500, 7000, 12000 (meters)
-        radius_standards = [3500, 7000, 12000]
+        # 5000, 10000, 15000 (meters)
+        radius_standards = [5000, 10000, 15000]
 
         # Normalize the requested radius to an integer and find the smallest
         # canonical bucket that is >= the requested radius. This avoids
@@ -1023,7 +1023,7 @@ def _parse_to_aware_datetime(val) -> Optional[datetime]:
 async def kepco_2025_new_api_implementation(
     lat: float = Query(..., description="위도 좌표", ge=-90, le=90),
     lon: float = Query(..., description="경도 좌표", ge=-180, le=180), 
-    radius: int = Query(..., description="검색 반경(미터) - 필수", ge=100, le=12000),
+    radius: int = Query(..., description="검색 반경(미터) - 필수", ge=100, le=15000),
     page: int = Query(1, description="페이지 번호", ge=1),
     limit: int = Query(20, description="페이지당 결과 수", ge=1, le=100),
     api_key: str = Depends(frontend_api_key_required),

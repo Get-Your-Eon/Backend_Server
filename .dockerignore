@@ -1,21 +1,21 @@
 # .dockerignore
-# Python 환경 파일
+# Python environment files
 __pycache__
 *.pyc
 *.pyo
 *.pyd
 
-# Poetry/Venv 가상 환경 폴더
+# Poetry / venv folders
 .venv
 venv
 /Users/*/Library/Caches/pypoetry
 
-# IDE 및 Git 관련 파일
+# IDE and Git related files
 .idea/
 .vscode/
 .git/
 .gitignore
 
-# 기타
+# Misc
 *.log
 poetry.lock  # 이미 위에서 복사했으므로 제외

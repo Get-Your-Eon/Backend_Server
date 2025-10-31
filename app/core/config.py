@@ -41,6 +41,11 @@ class Settings(BaseSettings):
     # Cache TTL in seconds for station SEARCH results. Use 300s (5 minutes)
     # per deployment request to balance freshness and load.
     CACHE_EXPIRE_SECONDS: int = 300
+    # Persistent cache TTL for station SEARCH results (static station positions).
+    # This cache is intended to persist static station location data longer so
+    # that previously-viewed map markers remain available when users navigate
+    # away and return. Default: 1 day.
+    PERSISTENT_STATION_CACHE_SECONDS: int = 86400
     # Cache TTL in seconds for station DETAIL results (charger specs/status).
     # Use 300s (5 minutes) as the baseline for dynamic data freshness. The
     # application logic will still validate charger status recency (30-min
