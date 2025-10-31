@@ -18,7 +18,7 @@ import math
 import json
 import re
 
-# Project internal module imports
+# 프로젝트 내부 모듈 임포트
 from app.core.config import settings
 from app.db.database import get_async_session
 from app.redis_client import (
@@ -31,10 +31,10 @@ from app.redis_client import (
 from app.api.v1.api import api_router
 from app.api.deps import frontend_api_key_required
 
-# --- Determine admin mode from environment variable ---
+# --- 환경 변수로 관리자 모드 판단 ---
 IS_ADMIN = os.getenv("ADMIN_MODE", "false").lower() == "true"
 
-# --- Lifespan context manager definition ---
+# --- Lifespan Context Manager 정의 ---
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     print("Application startup: Initializing resources...")
@@ -44,7 +44,7 @@ async def lifespan(app: FastAPI):
     print("Application shutdown: Cleaning up resources...")
     await close_redis_pool()
 
-# --- HTTP Basic authentication (admin only) ---
+# --- HTTP Basic 인증 (관리자 전용) ---
 security = HTTPBasic()
 raw_admins = os.getenv("ADMIN_CREDENTIALS", "")
 ADMIN_ACCOUNTS = dict([cred.split(":") for cred in raw_admins.split(",") if cred])
@@ -66,7 +66,7 @@ def ensure_read_only_sql(sql: str):
     if not sql.strip().lower().startswith("select"):
         raise HTTPException(status_code=400, detail="Only read-only SELECT queries are allowed")
 
-# --- Create FastAPI application ---
+# --- FastAPI Application 생성 ---
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.API_VERSION,
@@ -77,7 +77,7 @@ app = FastAPI(
     openapi_url="/openapi.json" if IS_ADMIN else None
 )
 
-# --- CORS: restrict origins to allowed list from environment ---
+# --- CORS: restrict origins to allowed list from env ---
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "")
 if allowed_origins_env:
     allowed_origins = [o.strip() for o in allowed_origins_env.split(",") if o.strip()]
@@ -93,7 +93,7 @@ if allowed_origins:
         allow_headers=["*"],
     )
 
-# --- Admin-only docs & redoc endpoints ---
+# --- 관리자용 docs & redoc 엔드포인트 ---
 if IS_ADMIN:
     @app.get("/docs", include_in_schema=False)
     async def get_docs(credentials: HTTPBasicCredentials = Depends(admin_required)):
@@ -103,7 +103,7 @@ if IS_ADMIN:
     async def get_redoc(credentials: HTTPBasicCredentials = Depends(admin_required)):
         return get_redoc_html(openapi_url=app.openapi_url, title=f"{settings.PROJECT_NAME} - ReDoc")
 
-# --- Basic health check endpoint ---
+# --- 기본 헬스 체크 엔드포인트 ---
 @app.get("/", tags=["Infrastructure"])
 def read_root():
     return {
@@ -161,20 +161,20 @@ async def health_check(db: AsyncSession = Depends(get_async_session), redis_clie
 
 @app.get("/subsidy", tags=["Subsidy"], summary="Lookup subsidies by manufacturer and model_group")
 async def subsidy_lookup(manufacturer: str, model_group: str, db: AsyncSession = Depends(get_async_session), _ok: bool = Depends(frontend_api_key_required)):
-        """Return subsidy rows for given manufacturer and model_group.
+    """Return subsidy rows for given manufacturer and model_group.
 
-        Response format (list of objects):
-        [
-            {
-                "model_name": str,
-                "subsidy_national": int,
-                "subsidy_local": int,
-                "subsidy_total": int
-            },
-            ...
-        ]
-        """
-        try:
+    Response format (list of objects):
+    [
+      {
+        "model_name": str,
+        "subsidy_national": int,
+        "subsidy_local": int,
+        "subsidy_total": int
+      },
+      ...
+    ]
+    """
+    try:
         query_sql = (
             "SELECT model_name, subsidy_national_10k_won, subsidy_local_10k_won, subsidy_total_10k_won, sale_price "
             "FROM subsidies "
@@ -201,9 +201,9 @@ async def subsidy_lookup(manufacturer: str, model_group: str, db: AsyncSession =
             "salePrice": int(m.get("sale_price")) if m.get("sale_price") is not None else None,
             })
 
-            return JSONResponse(status_code=200, content=mapped)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        return JSONResponse(status_code=200, content=mapped)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/subsidy/by", tags=["Subsidy"], summary="Lookup subsidies (camelCase) by manufacturer and modelGroup")
@@ -245,7 +245,7 @@ async def subsidy_lookup_camel(manufacturer: str, modelGroup: str, db: AsyncSess
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- Station/charger search endpoints (independent from subsidy features) ---
+# --- 충전소/충전기 검색 엔드포인트 (보조금 기능과 완전 독립) ---
 @app.get("/api/v1/stations-test-new", tags=["Station"], summary="NEW CODE TEST - EV charging stations")
 async def search_ev_stations_new_test(
     lat: float = Query(..., description="위도", ge=-90, le=90),
@@ -257,19 +257,19 @@ async def search_ev_stations_new_test(
     db: AsyncSession = Depends(get_async_session),
     redis_client: Redis = Depends(get_redis_client)
 ):
-    """NEW CODE TEST ENDPOINT"""
-    print("TEST ENDPOINT - NEW CODE CONFIRMED RUNNING")
+    """🚨 NEW CODE TEST ENDPOINT"""
+    print(f"🔥🔥🔥 TEST ENDPOINT - NEW CODE CONFIRMED RUNNING 🔥🔥🔥")
     return {
         "message": "NEW CODE IS RUNNING!",
     "timestamp": datetime.now(timezone.utc).isoformat(),
         "received_params": {"lat": lat, "lon": lon, "radius": radius}
     }
 
-@app.get("/api/v1/stations", tags=["Station"], summary="Requirement-compliant station search")
+@app.get("/api/v1/stations", tags=["Station"], summary="✅ 요구사항 완전 준수 - 충전소 검색")
 async def search_ev_stations_requirement_compliant(
     lat: str = Query(..., description="사용자 위도 (string 타입)", regex=r"^-?\d+\.?\d*$"),
     lon: str = Query(..., description="사용자 경도 (string 타입)", regex=r"^-?\d+\.?\d*$"),
-    radius: int = Query(..., description="반경(m) - 3500,7000,12000 기준", ge=100, le=12000),
+    radius: int = Query(..., description="반경(m) - 1000,3000,5000,7000,10000 기준", ge=100, le=10000),
     page: int = Query(1, description="페이지 번호", ge=1),
     limit: int = Query(20, description="페이지당 결과 수", ge=1, le=100),
     api_key: str = Depends(frontend_api_key_required),
@@ -277,16 +277,16 @@ async def search_ev_stations_requirement_compliant(
     redis_client: Redis = Depends(get_redis_client)
 ):
     """
-    Requirement-compliant station search implementation
-
-    1. Convert user lat/lon (string) to administrative address and build `addr`
-    2. Check cache -> DB -> external API order
-    3. Normalize radius into canonical buckets: 1000, 3000, 5000, 7000, 10000
-    4. Separate static and dynamic data storage
-    5. Response includes station ID, address, station name, lat, lon (strings)
+    ✅ 백엔드 요구사항 완전 준수 구현
+    
+    1. 사용자 위도/경도(string) → 시/군/구/동 매핑 → addr 생성
+    2. Cache 조회 → DB 조회 → API 호출 순서
+    3. 반경 기준값(1000/3000/5000/7000/10000) 처리
+    4. 정적/동적 데이터 분리 저장
+    5. 응답: 충전소ID, 충전기주소(addr), 충전소명칭, 위도, 경도 (모두 string)
     """
-    print("Station search started (requirement-compliant)")
-    print(f"Input parameters: lat={lat}, lon={lon}, radius={radius}")
+    print(f"✅ 요구사항 준수 충전소 검색 시작")
+    print(f"✅ 입력: lat={lat}, lon={lon}, radius={radius}")
     
     try:
         # === 1단계: 좌표 → 주소 변환 ===
@@ -308,7 +308,7 @@ async def search_ev_stations_requirement_compliant(
                 timeout=10.0
             )
             
-                if nominatim_response.status_code == 200:
+            if nominatim_response.status_code == 200:
                 nominatim_data = nominatim_response.json()
                 address_components = nominatim_data.get("address", {})
                 
@@ -318,16 +318,18 @@ async def search_ev_stations_requirement_compliant(
                 addr = f"{city} {district}".strip()
                 
                 if not addr:
-                    addr = "Seoul"  # default
+                    addr = "서울특별시"  # 기본값
             else:
-                addr = "Seoul"  # default
+                addr = "서울특별시"  # 기본값
         
-    print(f"Mapped address: {addr}")
+        print(f"✅ 매핑된 주소: {addr}")
         
-    # === Step 2: Normalize radius into canonical buckets ===
-    # Map the requested radius to the smallest canonical bucket that is >= requested value.
-    # Canonical buckets: 3500, 7000, 12000 (meters)
-        radius_standards = [3500, 7000, 12000]
+        # === 2단계: 반경 기준값 정규화 ===
+        # Use "이하" (less than or equal) mapping: map requested radius to
+        # the smallest canonical bucket that is >= requested value.
+        # New required buckets per product spec:
+        # 1000, 3000, 5000, 7000, 10000 (meters)
+        radius_standards = [1000, 3000, 5000, 7000, 10000]
 
         # Normalize the requested radius to an integer and find the smallest
         # canonical bucket that is >= the requested radius. This avoids
@@ -338,7 +340,7 @@ async def search_ev_stations_requirement_compliant(
             requested_radius = radius
 
         actual_radius = next((r for r in radius_standards if requested_radius <= r), radius_standards[-1])
-    print(f"Radius normalized: requested={requested_radius} -> normalized={actual_radius} (buckets={radius_standards})")
+        print(f"✅ 반경 정규화: requested={requested_radius} -> normalized={actual_radius} (buckets={radius_standards})")
         
         # === 3단계: Cache 조회 ===
         # Use rounded coordinates in the cache key to avoid cache collisions caused
@@ -355,7 +357,7 @@ async def search_ev_stations_requirement_compliant(
         try:
             cached_data = await redis_client.get(cache_key)
             if cached_data:
-                print(f"Cache hit: {cache_key}")
+                print(f"✅ Cache Hit: {cache_key}")
                 cached_result = json.loads(cached_data)
                 
                 # 거리 필터링 후 반환
@@ -398,10 +400,10 @@ async def search_ev_stations_requirement_compliant(
                     "stations": filtered_stations
                 }
         except Exception as cache_error:
-            print(f"Cache error: {cache_error}")
+            print(f"⚠️ Cache 오류: {cache_error}")
         
     # === 4단계: DB 조회 (정적 데이터) ===
-    print("DB query start...")
+        print(f"✅ DB 조회 시작...")
         try:
             # 정적 데이터 조회 (충전기 상태코드 제외)
             # NOTE: some deployments may not have KEPCO-specific columns (cs_nm/addr).
@@ -472,7 +474,7 @@ async def search_ev_stations_requirement_compliant(
             db_stations = result.fetchall()
             
             if db_stations:
-                print(f"DB hit: found {len(db_stations)} stations")
+                print(f"✅ DB Hit: {len(db_stations)}개 충전소 발견")
                 
                 db_result = []
                 for row in db_stations:
@@ -503,7 +505,7 @@ async def search_ev_stations_requirement_compliant(
                                     "available_chargers": avail_ch
                                 })
                     except Exception as row_error:
-                        print(f"DB row processing error: {row_error}")
+                        print(f"⚠️ DB row 처리 오류: {row_error}")
                         continue
                 
                 if db_result:
@@ -514,9 +516,9 @@ async def search_ev_stations_requirement_compliant(
                     try:
                         distances = [int(x.get("distance_m") or calculate_distance_haversine(lat_float, lon_float, float(x["lat"]), float(x["lon"]))) for x in db_result]
                         sample = distances[:10]
-                        print(f"Debug distances sample (meters): count={len(distances)} sample={sample}")
+                        print(f"🔍 Debug distances sample (meters): count={len(distances)} sample={sample}")
                     except Exception as _dist_err:
-                        print(f"Distance debug generation failed: {_dist_err}")
+                        print(f"⚠️ 거리 디버그 생성 실패: {_dist_err}")
                     
                     # Cache에 저장
                     try:
@@ -526,11 +528,11 @@ async def search_ev_stations_requirement_compliant(
                             cache_stations = [{k: v for k, v in s.items() if k not in ("distance_m", "total_chargers", "available_chargers")} for s in db_result]
                             cache_data = {"stations": _serialize_for_cache(cache_stations), "timestamp": datetime.now(timezone.utc).isoformat()}
                             await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(_serialize_for_cache(cache_data), ensure_ascii=False))
-                            print(f"DB results cached: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
+                            print(f"✅ DB 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
                         else:
-                            print(f"DB results empty - skipping cache: key={cache_key}")
+                            print(f"ℹ️ DB 결과 빈 리스트 - 캐시 저장 생략: key={cache_key}")
                     except Exception as _c_err:
-                        print(f"Cache save failed: {_c_err}")
+                        print(f"⚠️ Cache 저장 실패: {_c_err}")
                         pass
                     
                     return {
@@ -539,17 +541,17 @@ async def search_ev_stations_requirement_compliant(
                         "radius_normalized": actual_radius,
                         "stations": db_result
                     }
-    except Exception as db_error:
+        except Exception as db_error:
             # If a DB error occurs, rollback the session so subsequent DB commands
             # (e.g. inserts) are not run inside an aborted transaction.
             try:
                 await db.rollback()
             except Exception:
                 pass
-            print(f"DB query error: {db_error}")
+            print(f"⚠️ DB 조회 오류: {db_error}")
         
         # === 5단계: API 호출 및 저장 ===
-    print("Calling KEPCO API...")
+        print(f"✅ KEPCO API 호출 시작...")
         # use module-level `settings` imported at top to avoid UnboundLocalError
         kepco_url = settings.EXTERNAL_STATION_API_BASE_URL
         kepco_key = settings.EXTERNAL_STATION_API_KEY
@@ -557,8 +559,8 @@ async def search_ev_stations_requirement_compliant(
         if not kepco_url or not kepco_key:
             raise HTTPException(status_code=500, detail="KEPCO API 설정 누락")
         
-    print(f"KEPCO URL: {kepco_url}")
-    print(f"Making KEPCO API request to: {kepco_url}")
+        print(f"✅ KEPCO URL: {kepco_url}")
+        print(f"✅ Making KEPCO API request to: {kepco_url}")
         
         async with httpx.AsyncClient() as client:
             kepco_response = await client.get(
@@ -571,7 +573,7 @@ async def search_ev_stations_requirement_compliant(
                 timeout=30.0
             )
             
-            print(f"KEPCO response status: {kepco_response.status_code}")
+            print(f"✅ KEPCO Response Status: {kepco_response.status_code}")
             
             if kepco_response.status_code != 200:
                 raise HTTPException(
@@ -580,7 +582,7 @@ async def search_ev_stations_requirement_compliant(
                 )
             
             kepco_data = kepco_response.json()
-            print("KEPCO API response received")
+            print(f"✅ KEPCO API 응답 수신 완료")
         
         # === 6단계: 데이터 처리 및 DB 저장 ===
         api_stations = []
@@ -589,7 +591,7 @@ async def search_ev_stations_requirement_compliant(
         if isinstance(kepco_data, dict) and "data" in kepco_data:
             raw_data = kepco_data["data"]
             
-                    if isinstance(raw_data, list):
+            if isinstance(raw_data, list):
                 for item in raw_data:
                     try:
                         item_lat = float(item.get("lat", 0))
@@ -651,12 +653,12 @@ async def search_ev_stations_requirement_compliant(
                         continue
                 
                 # 트랜잭션 커밋
-                        try:
-                            await db.commit()
-                            print(f"DB save complete: {len(api_stations)} stations")
-                        except Exception as commit_error:
-                            print(f"Transaction commit error: {commit_error}")
-                            await db.rollback()
+                try:
+                    await db.commit()
+                    print(f"✅ DB 저장 완료: {len(api_stations)}개 충전소")
+                except Exception as commit_error:
+                    print(f"⚠️ 트랜잭션 커밋 오류: {commit_error}")
+                    await db.rollback()
         
         # === 7단계: Cache 저장 및 결과 반환 ===
         api_stations.sort(key=lambda x: calculate_distance_haversine(
@@ -678,8 +680,8 @@ async def search_ev_stations_requirement_compliant(
                 print(f"✅ API 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
             else:
                 print(f"ℹ️ API 결과 빈 리스트 - 캐시 저장 생략: key={cache_key}")
-                    except Exception as _c_err:
-                        print(f"API cache save failed: {_c_err}")
+        except Exception as _c_err:
+            print(f"⚠️ API 캐시 저장 실패: {_c_err}")
             pass
 
         return {
@@ -692,12 +694,12 @@ async def search_ev_stations_requirement_compliant(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Unhandled error: {str(e)}")
+        print(f"🚨 전체 오류: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
 def calculate_distance_haversine(lat1, lon1, lat2, lon2):
-    """Calculate distance between two points using the Haversine formula (meters)."""
+    """하버사인 공식으로 두 지점 간 거리 계산 (미터)"""
     try:
         R = 6371000  # 지구 반지름(미터)
         lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
@@ -709,12 +711,12 @@ def calculate_distance_haversine(lat1, lon1, lat2, lon2):
 
 
 def _dedupe_stations_by_id(stations):
-        """Deduplicate station dicts by station_id.
+    """Deduplicate station dicts by station_id.
 
-        - stations: list of dicts that must contain 'station_id' (string)
-        - Returns a list preserving the first-seen station for each id and
-            merges charger lists if present.
-        """
+    - stations: list of dicts that must contain 'station_id' (string)
+    - Returns a list preserving the first-seen station for each id but
+      merges charger lists if present.
+    """
     by_id = {}
     for s in stations:
         sid = str(s.get("station_id", "")).strip()
@@ -764,10 +766,10 @@ async def _clear_db_transaction(db: AsyncSession):
 
 
 async def _ensure_station_db_id(db: AsyncSession, cs_id: str, item: dict = None, now: datetime = None):
-    """Ensure a station row exists for the given cs_id and return its DB primary key id.
+    """Ensure a station row exists for given cs_id and return its DB primary key id.
 
     If the station exists, returns the id. If not, attempts to INSERT the station
-    (using provided `item` for fields) and RETURN the id. This centralizes the
+    (using provided `item` for fields) and RETURNING id. This centralizes the
     logic so callers inserting chargers never omit the required station_id FK.
     """
     if not cs_id:
@@ -822,7 +824,7 @@ async def _ensure_station_db_id(db: AsyncSession, cs_id: str, item: dict = None,
             await _clear_db_transaction(db)
         except Exception:
             pass
-    print(f"_ensure_station_db_id failed: {e}")
+        print(f"⚠️ _ensure_station_db_id 실패: {e}")
 
     return None
 
@@ -908,7 +910,7 @@ def _parse_to_aware_datetime(val) -> Optional[datetime]:
 
     return None
 
-@app.get("/api/v1/stations-kepco-2025", tags=["Station"], summary="KEPCO 2025 API - compatibility redirect")
+@app.get("/api/v1/stations-kepco-2025", tags=["Station"], summary="🚀 KEPCO 2025 API - BRAND NEW")
 async def kepco_2025_new_api_implementation(
     lat: float = Query(..., description="위도 좌표", ge=-90, le=90),
     lon: float = Query(..., description="경도 좌표", ge=-180, le=180), 
@@ -920,13 +922,20 @@ async def kepco_2025_new_api_implementation(
     redis_client: Redis = Depends(get_redis_client)
 ):
     """
-    KEPCO 2025 compatibility handler.
-    This endpoint redirects to the canonical `/api/v1/stations` handler preserving query params.
+    🚀 KEPCO 2025 API - 완전히 새로운 구현
+    이전 URL: /ws/chargePoint/curChargePoint (삭제됨)
+    새 URL: /EVchargeManage.do (정확함)
     """
-    print("KEPCO 2025 compatibility redirect invoked")
+    print(f"🚀🚀🚀 KEPCO 2025 COMPLETELY NEW CODE 🚀🚀🚀")
+    print(f"🚀 Function: kepco_2025_new_api_implementation")
+    print(f"🚀 Time: {datetime.now(timezone.utc)}")
+    print(f"🚀 Params: lat={lat}, lon={lon}, radius={radius}")
+    print(f"🚀 ABSOLUTE CONFIRMATION: This is the NEW CODE running!")
+    print(f"🚀 Expected KEPCO URL: https://bigdata.kepco.co.kr/openapi/v1/EVchargeManage.do")
     
     # This endpoint is deprecated in favor of the canonical `/api/v1/stations` handler.
-    # For compatibility we return a temporary redirect to the canonical endpoint preserving the query parameters.
+    # For compatibility we return a temporary redirect to the canonical endpoint
+    # preserving the query parameters. Clients should call `/api/v1/stations`.
     try:
         target = f"/api/v1/stations?lat={lat}&lon={lon}&radius={radius}&page={page}&limit={limit}"
         return RedirectResponse(url=target, status_code=307)
