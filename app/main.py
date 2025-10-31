@@ -353,6 +353,9 @@ async def search_ev_stations_requirement_compliant(
         # Use coordinate-first key (avoid addr text differences)
         # include pagination in cache key so different pages/limits are cached separately
         cache_key = f"stations:lat{lat_round}:lon{lon_round}:r{actual_radius}:p{page}:l{limit}"
+        # persistent cache key (longer TTL) to keep static station positions for
+        # map-marker UX when users return to a previously-viewed region.
+        persistent_key = f"stations_persistent:lat{lat_round}:lon{lon_round}:r{actual_radius}:p{page}:l{limit}"
 
         try:
             cached_data = await redis_client.get(cache_key)
@@ -392,13 +395,90 @@ async def search_ev_stations_requirement_compliant(
                         filtered_stations.append(station_out)
                 
                 filtered_stations.sort(key=lambda x: int(x["distance_m"]))
-                
+                # Metrics: increment short-lived cache hit counter (best-effort)
+                try:
+                    if redis_client:
+                        await redis_client.incr("metrics:stations:cache_hits:short")
+                except Exception as _merr:
+                    print(f"⚠️ Metric increment (short cache) failed: {_merr}")
+
                 return {
                     "source": "cache",
                     "addr": addr,
                     "radius_normalized": actual_radius,
                     "stations": filtered_stations
                 }
+            # Short-lived cache miss -> try persistent static cache for fast map markers
+            try:
+                persistent_raw = await redis_client.get(persistent_key)
+                if persistent_raw:
+                    print(f"✅ Persistent Cache Hit: {persistent_key}")
+                    persistent_result = json.loads(persistent_raw)
+                    # Return static markers quickly. We compute distances but do
+                    # NOT fetch per-station charger counts here to keep the
+                    # response fast; frontend should request details on click.
+                    filtered_stations = []
+                    station_ids = [s.get("station_id") for s in persistent_result.get("stations", []) if s.get("station_id")]
+
+                    # Batch-fetch charger counts for all stations to avoid N queries.
+                    counts_map = {}
+                    try:
+                        if station_ids:
+                            counts_q = """
+                                SELECT cs_id, COUNT(*) AS total_ch, COALESCE(SUM( (cp_stat::text = '1')::int ), 0) AS avail_ch
+                                FROM chargers
+                                WHERE cs_id = ANY(:cs_ids)
+                                GROUP BY cs_id
+                            """
+                            res = await db.execute(text(counts_q), {"cs_ids": station_ids})
+                            rows = res.fetchall()
+                            for r in rows:
+                                m = r._mapping
+                                counts_map[str(m.get("cs_id"))] = {
+                                    "total": int(m.get("total_ch") or 0),
+                                    "avail": int(m.get("avail_ch") or 0)
+                                }
+                    except Exception as _batch_err:
+                        print(f"⚠️ Batch counts query failed (ignored): {_batch_err}")
+
+                    for station in persistent_result.get("stations", []):
+                        try:
+                            dist = calculate_distance_haversine(
+                                lat_float, lon_float,
+                                float(station["lat"]), float(station["lon"])
+                            )
+                        except Exception:
+                            dist = 999999
+
+                        if dist <= radius:
+                            station_out = dict(station)
+                            station_out["distance_m"] = str(int(dist))
+                            # Attach batch counts if available; otherwise None
+                            sid = str(station_out.get("station_id")) if station_out.get("station_id") is not None else None
+                            if sid and sid in counts_map:
+                                station_out["total_chargers"] = counts_map[sid]["total"]
+                                station_out["available_chargers"] = counts_map[sid]["avail"]
+                            else:
+                                station_out["total_chargers"] = None
+                                station_out["available_chargers"] = None
+                            filtered_stations.append(station_out)
+
+                    filtered_stations.sort(key=lambda x: int(x["distance_m"]))
+                    # Metrics: increment persistent cache hit counter (best-effort)
+                    try:
+                        if redis_client:
+                            await redis_client.incr("metrics:stations:cache_hits:persistent")
+                    except Exception as _merr:
+                        print(f"⚠️ Metric increment (persistent cache) failed: {_merr}")
+
+                    return {
+                        "source": "persistent_cache",
+                        "addr": addr,
+                        "radius_normalized": actual_radius,
+                        "stations": filtered_stations
+                    }
+            except Exception as _p_err:
+                print(f"⚠️ Persistent cache read error (ignored): {_p_err}")
         except Exception as cache_error:
             print(f"⚠️ Cache 오류: {cache_error}")
         
@@ -528,7 +608,22 @@ async def search_ev_stations_requirement_compliant(
                             cache_stations = [{k: v for k, v in s.items() if k not in ("distance_m", "total_chargers", "available_chargers")} for s in db_result]
                             cache_data = {"stations": _serialize_for_cache(cache_stations), "timestamp": datetime.now(timezone.utc).isoformat()}
                             await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(_serialize_for_cache(cache_data), ensure_ascii=False))
+                            # Also write a persistent, long-lived static snapshot used
+                            # to quickly repopulate map markers when users return.
+                            try:
+                                persistent_ttl = getattr(settings, "PERSISTENT_STATION_CACHE_SECONDS", 86400)
+                                await redis_client.setex(persistent_key, persistent_ttl, json.dumps(_serialize_for_cache(cache_data), ensure_ascii=False))
+                                print(f"✅ DB 결과 Persistent Cache 저장 완료: key={persistent_key} ttl={persistent_ttl}s")
+                            except Exception as _p_e:
+                                print(f"⚠️ Persistent cache write failed (ignored): {_p_e}")
+
                             print(f"✅ DB 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
+                        # Metrics: DB-path result
+                        try:
+                            if redis_client:
+                                await redis_client.incr("metrics:stations:cache_hits:db")
+                        except Exception as _merr:
+                            print(f"⚠️ Metric increment (db) failed: {_merr}")
                         else:
                             print(f"ℹ️ DB 결과 빈 리스트 - 캐시 저장 생략: key={cache_key}")
                     except Exception as _c_err:
@@ -677,12 +772,26 @@ async def search_ev_stations_requirement_compliant(
                 cache_stations = [{k: v for k, v in s.items() if k not in ("distance_m", "total_chargers", "available_chargers")} for s in api_stations]
                 cache_data = {"stations": _serialize_for_cache(cache_stations), "timestamp": now.isoformat()}
                 await redis_client.setex(cache_key, settings.CACHE_EXPIRE_SECONDS, json.dumps(_serialize_for_cache(cache_data), ensure_ascii=False))
+                # Also persist a static snapshot for faster marker rehydration
+                try:
+                    persistent_ttl = getattr(settings, "PERSISTENT_STATION_CACHE_SECONDS", 86400)
+                    await redis_client.setex(persistent_key, persistent_ttl, json.dumps(_serialize_for_cache(cache_data), ensure_ascii=False))
+                    print(f"✅ API 결과 Persistent Cache 저장 완료: key={persistent_key} ttl={persistent_ttl}s")
+                except Exception as _p_e:
+                    print(f"⚠️ Persistent cache write failed (ignored): {_p_e}")
                 print(f"✅ API 결과 Cache 저장 완료: key={cache_key} ttl={settings.CACHE_EXPIRE_SECONDS}s")
             else:
                 print(f"ℹ️ API 결과 빈 리스트 - 캐시 저장 생략: key={cache_key}")
         except Exception as _c_err:
             print(f"⚠️ API 캐시 저장 실패: {_c_err}")
             pass
+
+        # Metrics: API-path result (best-effort)
+        try:
+            if redis_client:
+                await redis_client.incr("metrics:stations:cache_hits:api")
+        except Exception as _merr:
+            print(f"⚠️ Metric increment (api) failed: {_merr}")
 
         return {
             "source": "kepco_api",
