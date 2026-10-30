@@ -10,11 +10,12 @@ against the deployed Render instance.
 import httpx
 import asyncio
 import json
+import os
 from typing import Dict, Any
 
 # KEPCO API 설정
 KEPCO_BASE_URL = "https://bigdata.kepco.co.kr/openapi/v1/EVchargeManage.do"
-KEPCO_API_KEY = "***REMOVED***"
+KEPCO_API_KEY = os.environ["KEPCO_API_KEY"]
 
 # 테스트 좌표 (강남역 근처)
 TEST_LAT = 37.374109692

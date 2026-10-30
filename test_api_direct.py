@@ -5,10 +5,11 @@ quick operational checks or when validating deployment results.
 """
 import requests
 import json
+import os
 
 # 테스트 설정
 BASE_URL = "https://backend-server-4na0.onrender.com"
-API_KEY = "***REMOVED***"
+API_KEY = os.environ["FRONTEND_API_KEY"]
 
 def test_health_check():
     """Check the /health endpoint to verify the service is reachable."""

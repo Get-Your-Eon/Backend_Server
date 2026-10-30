@@ -69,3 +69,12 @@ yarn-error.log*
 serverinfo.dat
 codyssey_backup.sql
 tmp/
+
+# --------------------------
+# Secrets (never commit)
+# --------------------------
+.env.*
+!.env.example
+!.env.template
+nginx/.htpasswd
+render-clean/

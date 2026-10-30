@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy import text
 
 # Environment variables (use the same DB as Render if available)
-RENDER_DATABASE_URL = "postgresql+asyncpg://codyssey_user:***REMOVED***@dpg-crm8gvogph6c73fpjnhg-a.oregon-postgres.render.com/codyssey"
+RENDER_DATABASE_URL = os.environ["DATABASE_URL"]
 
 async def test_station_query():
     """Test the station search query against the configured DB."""
